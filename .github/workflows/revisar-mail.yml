@@ -1,0 +1,29 @@
+# Cada 3 horas le pide al servidor que traiga los mails nuevos y los clasifique.
+# (Solo clasifica: aplicar en Gmail sigue siendo un boton que apretas vos.)
+# Necesita dos secretos en GitHub (Settings -> Secrets and variables -> Actions):
+#   PANEL_URL    la direccion del panel, por ejemplo https://mail-crm.onrender.com
+#   TAREA_TOKEN  el mismo valor que esta en nube.env
+name: Revisar mail
+
+on:
+  schedule:
+    - cron: "0 */3 * * *"
+  workflow_dispatch: {}
+
+jobs:
+  revisar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Pedir al servidor que revise el mail
+        env:
+          PANEL_URL: ${{ secrets.PANEL_URL }}
+          TAREA_TOKEN: ${{ secrets.TAREA_TOKEN }}
+        run: |
+          if [ -z "$PANEL_URL" ] || [ -z "$TAREA_TOKEN" ]; then
+            echo "Faltan los secretos PANEL_URL y TAREA_TOKEN: no hago nada."
+            exit 0
+          fi
+          curl --fail-with-body -sS -X POST "$PANEL_URL/api/tarea/actualizar" \
+            -H "Authorization: Bearer $TAREA_TOKEN" \
+            --max-time 300 --retry 3 --retry-delay 45 --retry-all-errors
