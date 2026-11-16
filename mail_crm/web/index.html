@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Mail CRM</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="theme-color" content="#2f5d50">
+<style>
+  :root {
+    --fondo: #f6f5f1; --panel: #ffffff; --texto: #1d1c1a; --suave: #6b6861; --borde: #e2dfd7;
+    --acento: #2f5d50; --acento-texto: #ffffff;
+    --papelera: #b3402f; --archivar: #6b6861; --dejar: #2b6cb0; --destacar: #a86a00;
+    --borrador: #6b46a8; --ninguna: #8a867d; --pendiente: #8a867d;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --fondo: #171716; --panel: #201f1d; --texto: #ecebe6; --suave: #a09c93; --borde: #34322e;
+      --acento: #7fc4ad; --acento-texto: #10201b;
+      --papelera: #f08a78; --archivar: #a09c93; --dejar: #7db3ee; --destacar: #e6b24d;
+      --borrador: #b79cf0; --ninguna: #8a867d; --pendiente: #8a867d;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--fondo); color: var(--texto);
+         font: 15px/1.45 system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 64px; }
+  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 20px; }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  .modo { font-size: 13px; color: var(--suave); border: 1px solid var(--borde); border-radius: 999px; padding: 2px 10px; }
+  .resumen { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 20px; }
+  .ficha { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; padding: 12px 14px;
+           text-align: left; color: inherit; font: inherit; cursor: pointer; }
+  .ficha[aria-pressed="true"] { border-color: var(--acento); box-shadow: inset 0 0 0 1px var(--acento); }
+  .ficha b { display: block; font-size: 24px; font-variant-numeric: tabular-nums; }
+  .ficha span { font-size: 13px; color: var(--suave); }
+  nav { display: flex; gap: 4px; border-bottom: 1px solid var(--borde); margin-bottom: 16px; }
+  nav button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 14px;
+               font: inherit; color: var(--suave); cursor: pointer; }
+  nav button[aria-selected="true"] { color: var(--texto); border-bottom-color: var(--acento); font-weight: 600; }
+  input, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--borde);
+                  border-radius: 8px; padding: 7px 10px; }
+  .buscar { width: 100%; max-width: 360px; margin-bottom: 12px; }
+  .tabla { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; font-weight: 600; color: var(--suave); text-transform: uppercase;
+       letter-spacing: 0.04em; padding: 10px 12px; border-bottom: 1px solid var(--borde); white-space: nowrap; }
+  td { padding: 10px 12px; border-bottom: 1px solid var(--borde); vertical-align: top; }
+  tr:last-child td { border-bottom: 0; }
+  .remitente { font-weight: 600; overflow-wrap: anywhere; }
+  .chico { font-size: 13px; color: var(--suave); overflow-wrap: anywhere; }
+  .num { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .accion { display: inline-block; font-size: 13px; font-weight: 600; white-space: nowrap; }
+  .accion::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+                    background: currentColor; margin-right: 6px; }
+  .btn { font: inherit; font-size: 13px; padding: 5px 10px; border-radius: 8px; border: 1px solid var(--borde);
+         background: var(--panel); color: var(--texto); cursor: pointer; white-space: nowrap; }
+  .btn:hover { border-color: var(--acento); }
+  .btn.principal { background: var(--acento); color: var(--acento-texto); border-color: var(--acento); font-weight: 600; }
+  .vacio { padding: 28px; text-align: center; color: var(--suave); }
+  form.regla { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
+  form.regla input[name="pattern"] { flex: 1 1 220px; }
+  form.regla input[name="note"] { flex: 1 1 160px; }
+  dialog { border: 1px solid var(--borde); border-radius: 12px; background: var(--panel); color: var(--texto);
+           padding: 20px; width: min(440px, calc(100vw - 32px)); }
+  dialog::backdrop { background: rgb(0 0 0 / 0.45); }
+  dialog h2 { margin: 0 0 4px; font-size: 17px; }
+  dialog label { display: block; margin-top: 12px; font-size: 13px; color: var(--suave); }
+  dialog select, dialog input { width: 100%; margin-top: 4px; }
+  dialog .pie { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+  #aviso { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: var(--texto);
+           color: var(--fondo); padding: 9px 16px; border-radius: 14px; font-size: 14px; display: none;
+           max-width: calc(100vw - 32px); overflow-wrap: anywhere; }
+  .btn:disabled { opacity: 0.6; cursor: default; }
+
+  /* Celular: cada fila de la tabla pasa a ser una tarjeta apilada. */
+  @media (max-width: 640px) {
+    main { padding: 16px 16px 72px; }
+    .resumen { grid-template-columns: repeat(2, 1fr); }
+    #btn-actualizar { margin-left: 0 !important; }
+    #btn-aplicar { width: 100%; padding: 10px; font-size: 15px; order: 9; }
+    nav button { flex: 1; padding: 10px 6px; }
+    .buscar { max-width: none; }
+    .tabla { border: 0; background: none; overflow: visible; }
+    thead { display: none; }
+    table, tbody, tr, td { display: block; width: 100%; }
+    tr { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px;
+         padding: 10px 12px; margin-bottom: 10px; }
+    td { border: 0 !important; padding: 3px 0; }
+    td:empty { display: none; }
+    td .btn { margin-top: 6px; padding: 8px 12px; }
+    form.regla > * { flex: 1 1 100%; }
+    input, select { font-size: 16px; } /* evita el zoom automatico de iOS al escribir */
+  }
+  #confirmar-detalle div { margin-top: 8px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Mail CRM</h1>
+    <span class="modo">Nada cambia en Gmail hasta que lo confirmes</span>
+    <button class="btn" id="btn-actualizar" style="margin-left:auto">Actualizar</button>
+    <button class="btn principal" id="btn-aplicar" hidden></button>
+    <button class="btn" id="btn-salir" hidden>Cerrar sesión</button>
+  </header>
+
+  <section class="resumen" id="resumen" aria-label="Mails por acción"></section>
+
+  <nav role="tablist">
+    <button role="tab" data-vista="mails" aria-selected="true">Mails</button>
+    <button role="tab" data-vista="contactos" aria-selected="false">Contactos</button>
+    <button role="tab" data-vista="reglas" aria-selected="false">Reglas</button>
+  </nav>
+
+  <section id="vista-mails">
+    <input class="buscar" id="buscar-mails" type="search" placeholder="Buscar por remitente o asunto" aria-label="Buscar mails">
+    <div class="tabla"><table>
+      <thead><tr><th>Fecha</th><th>Remitente y asunto</th><th>Acción</th><th>Motivo</th><th></th></tr></thead>
+      <tbody id="filas-mails"></tbody>
+    </table></div>
+  </section>
+
+  <section id="vista-contactos" hidden>
+    <input class="buscar" id="buscar-contactos" type="search" placeholder="Buscar contacto" aria-label="Buscar contactos">
+    <div class="tabla"><table>
+      <thead><tr><th>Contacto</th><th>Mails</th><th>Último mail</th><th>Regla</th><th></th></tr></thead>
+      <tbody id="filas-contactos"></tbody>
+    </table></div>
+  </section>
+
+  <section id="vista-reglas" hidden>
+    <form class="regla" id="form-regla">
+      <input name="pattern" required placeholder="Mail o dominio (tienda.com)" aria-label="Mail o dominio">
+      <select name="action" aria-label="Acción"></select>
+      <input name="note" placeholder="Nota (opcional)" aria-label="Nota">
+      <button class="btn principal">Agregar regla</button>
+    </form>
+    <div class="tabla"><table>
+      <thead><tr><th>Remitente</th><th>Acción</th><th>Nota</th><th></th></tr></thead>
+      <tbody id="filas-reglas"></tbody>
+    </table></div>
+  </section>
+</main>
+
+<dialog id="dialogo">
+  <form method="dialog" id="form-dialogo">
+    <h2>Regla para este remitente</h2>
+    <div class="chico">La regla manda sobre la IA para todos sus mails.</div>
+    <label>Aplicar a
+      <select name="pattern"></select>
+    </label>
+    <label>Qué hacer siempre
+      <select name="action"></select>
+    </label>
+    <div class="pie">
+      <button class="btn" value="cancelar" formnovalidate>Cancelar</button>
+      <button class="btn principal" value="guardar">Guardar regla</button>
+    </div>
+  </form>
+</dialog>
+<dialog id="confirmar">
+  <form method="dialog">
+    <h2>Aplicar en tu Gmail</h2>
+    <div id="confirmar-detalle"></div>
+    <div class="chico" style="margin-top:10px">Todo se puede deshacer desde este panel. La papelera de Gmail guarda los mails 30 días.</div>
+    <div class="pie">
+      <button class="btn" value="cancelar">Cancelar</button>
+      <button class="btn principal" value="aplicar">Aplicar</button>
+    </div>
+  </form>
+</dialog>
+<div id="aviso" role="status"></div>
+
+<script>
+const NOMBRES = { papelera: "Papelera", archivar: "Archivar", dejar: "Dejar en bandeja", destacar: "Destacar",
+                  borrador: "Crear borrador", ninguna: "Sin acción (dudoso)", pendiente: "Pendiente" };
+const ORDEN = ["papelera", "archivar", "dejar", "destacar", "borrador", "ninguna", "pendiente"];
+const estado = { mails: [], contactos: [], reglas: [], acciones: [], filtro: null };
+const $ = (id) => document.getElementById(id);
+
+// Crea elementos SIEMPRE con textContent: el contenido de un mail nunca se interpreta como HTML.
+function el(tag, attrs = {}, ...hijos) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") e.className = v; else if (k === "onclick") e.onclick = v; else e.setAttribute(k, v);
+  }
+  for (const h of hijos) e.append(h instanceof Node ? h : document.createTextNode(h ?? ""));
+  return e;
+}
+const etiqueta = (accion) => {
+  const a = accion || "pendiente";
+  return el("span", { class: "accion", style: `color: var(--${a})` }, NOMBRES[a] || a);
+};
+const fecha = (iso) => new Date(iso).toLocaleDateString("es-AR", { day: "2-digit", month: "short" });
+function avisar(texto) {
+  const a = $("aviso"); a.textContent = texto; a.style.display = "block";
+  clearTimeout(avisar.t); avisar.t = setTimeout(() => (a.style.display = "none"), 3500);
+}
+async function api(url, opciones) {
+  const r = await fetch(url, opciones);
+  if (r.status === 401) { location.href = "/login"; throw new Error("Tenés que iniciar sesión."); }
+  const datos = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(typeof datos.detail === "string" ? datos.detail : "No se pudo completar la acción.");
+  return datos;
+}
+
+async function cargar() {
+  const [m, c, r] = await Promise.all([api("/api/mails"), api("/api/contactos"), api("/api/reglas")]);
+  Object.assign(estado, { mails: m.mails, contactos: c.contactos, reglas: r.reglas, acciones: r.acciones, conEfecto: m.con_efecto });
+  pintarResumen(m.por_accion); pintarMails(); pintarContactos(); pintarReglas(); pintarBotonAplicar();
+  $("btn-salir").hidden = !m.login_activo;
+}
+$("btn-actualizar").addEventListener("click", async () => {
+  const b = $("btn-actualizar"); b.disabled = true; b.textContent = "Revisando Gmail…";
+  try {
+    const r = await api("/api/actualizar", { method: "POST" });
+    await cargar();
+    avisar(r.aviso || (r.nuevos ? `${r.nuevos} mails nuevos, ${r.clasificados} clasificados.` : "No hay mails nuevos."));
+  } catch (e) { avisar(e.message); }
+  b.disabled = false; b.textContent = "Actualizar";
+});
+$("btn-salir").addEventListener("click", async () => {
+  await fetch("/logout", { method: "POST" }).catch(() => {});
+  location.href = "/login";
+});
+
+// Mails cuya decision cambia algo en Gmail y todavia no se aplico.
+const porAplicar = () => estado.mails.filter((m) => !m.applied && estado.conEfecto.includes(m.action));
+
+function pintarBotonAplicar() {
+  const n = porAplicar().length, b = $("btn-aplicar");
+  b.hidden = n === 0;
+  b.textContent = `Aplicar en Gmail (${n})`;
+}
+
+$("btn-aplicar").addEventListener("click", () => {
+  const cuenta = {};
+  for (const m of porAplicar()) cuenta[m.action] = (cuenta[m.action] || 0) + 1;
+  const textos = { papelera: "van a la papelera", archivar: "se archivan (salen de la bandeja)", destacar: "se marcan con estrella" };
+  $("confirmar-detalle").replaceChildren(...Object.entries(cuenta).map(([a, n]) =>
+    el("div", {}, el("b", { style: `color: var(--${a})` }, String(n)), ` ${n === 1 ? "mail" : "mails"}: ${textos[a]}`)));
+  $("confirmar").showModal();
+});
+$("confirmar").addEventListener("close", async () => {
+  if ($("confirmar").returnValue !== "aplicar") return;
+  const b = $("btn-aplicar"); b.disabled = true; b.textContent = "Aplicando…";
+  try {
+    const r = await api("/api/aplicar", { method: "POST", headers: { "Content-Type": "application/json" },
+                                          body: JSON.stringify({ decision_ids: porAplicar().map((m) => m.decision_id) }) });
+    await cargar();
+    avisar(r.errores.length ? `${r.aplicadas} aplicadas, ${r.errores.length} con error: ${r.errores[0]}` : `${r.aplicadas} acciones aplicadas en Gmail.`);
+  } catch (e) { avisar(e.message); pintarBotonAplicar(); }
+  b.disabled = false;
+});
+
+async function deshacer(decisionId) {
+  try {
+    await api("/api/deshacer", { method: "POST", headers: { "Content-Type": "application/json" },
+                                 body: JSON.stringify({ decision_id: decisionId }) });
+    await cargar();
+    avisar("Acción deshecha en Gmail.");
+  } catch (e) { avisar(e.message); }
+}
+
+function pintarResumen(porAccion) {
+  const cont = $("resumen"); cont.replaceChildren();
+  for (const a of ORDEN.filter((x) => porAccion[x])) {
+    cont.append(el("button", { class: "ficha", "aria-pressed": String(estado.filtro === a),
+      onclick: () => { estado.filtro = estado.filtro === a ? null : a; pintarResumen(porAccion); pintarMails(); } },
+      el("b", { style: `color: var(--${a})` }, String(porAccion[a])), el("span", {}, NOMBRES[a])));
+  }
+}
+
+function pintarMails() {
+  const q = $("buscar-mails").value.trim().toLowerCase();
+  const filas = estado.mails.filter((m) =>
+    (!estado.filtro || (m.action || "pendiente") === estado.filtro) &&
+    (!q || `${m.from_email} ${m.from_name} ${m.subject}`.toLowerCase().includes(q)));
+  const tbody = $("filas-mails"); tbody.replaceChildren();
+  if (!filas.length) { tbody.append(el("tr", {}, el("td", { colspan: "5", class: "vacio" }, "No hay mails para mostrar."))); return; }
+  for (const m of filas) {
+    tbody.append(el("tr", {},
+      el("td", { class: "num chico" }, fecha(m.received_at)),
+      el("td", {}, el("div", { class: "remitente" }, m.from_name || m.from_email),
+                   el("div", {}, m.subject || "(sin asunto)"), el("div", { class: "chico" }, m.from_email)),
+      el("td", {}, etiqueta(m.action), m.applied ? el("div", { class: "chico" }, "Aplicada en Gmail") : ""),
+      el("td", { class: "chico" }, m.reason || "Todavía no se clasificó."),
+      el("td", {}, m.applied
+        ? el("button", { class: "btn", onclick: () => deshacer(m.decision_id) }, "Deshacer")
+        : el("button", { class: "btn", onclick: () => abrirDialogo(m.from_email) }, "Crear regla"))));
+  }
+}
+
+function pintarContactos() {
+  const q = $("buscar-contactos").value.trim().toLowerCase();
+  const filas = estado.contactos.filter((c) => !q || `${c.email} ${c.name}`.toLowerCase().includes(q));
+  const tbody = $("filas-contactos"); tbody.replaceChildren();
+  if (!filas.length) { tbody.append(el("tr", {}, el("td", { colspan: "5", class: "vacio" }, "No hay contactos."))); return; }
+  for (const c of filas) {
+    tbody.append(el("tr", {},
+      el("td", {}, el("div", { class: "remitente" }, c.name || c.email), el("div", { class: "chico" }, c.email)),
+      el("td", { class: "num" }, String(c.email_count)),
+      el("td", { class: "num chico" }, fecha(c.last_seen)),
+      el("td", {}, c.regla ? etiqueta(c.regla.action) : el("span", { class: "chico" }, "Decide la IA")),
+      el("td", {}, el("button", { class: "btn", onclick: () => abrirDialogo(c.email) }, c.regla ? "Cambiar regla" : "Crear regla"))));
+  }
+}
+
+function pintarReglas() {
+  const sel = document.querySelector("#form-regla select");
+  if (!sel.options.length) for (const a of estado.acciones) sel.append(el("option", { value: a }, NOMBRES[a]));
+  const tbody = $("filas-reglas"); tbody.replaceChildren();
+  if (!estado.reglas.length) { tbody.append(el("tr", {}, el("td", { colspan: "4", class: "vacio" }, "Todavía no hay reglas."))); return; }
+  for (const r of estado.reglas) {
+    tbody.append(el("tr", {},
+      el("td", { class: "remitente" }, r.pattern), el("td", {}, etiqueta(r.action)), el("td", { class: "chico" }, r.note || ""),
+      el("td", {}, el("button", { class: "btn", onclick: () => borrarRegla(r.pattern) }, "Borrar"))));
+  }
+}
+
+async function guardarRegla(pattern, action, note = "") {
+  try {
+    const r = await api("/api/reglas", { method: "POST", headers: { "Content-Type": "application/json" },
+                                         body: JSON.stringify({ pattern, action, note }) });
+    await cargar();
+    avisar(`Regla guardada. ${r.decisiones_actualizadas} decisiones actualizadas.`);
+  } catch (e) { avisar(e.message); }
+}
+async function borrarRegla(pattern) {
+  try {
+    const r = await api("/api/reglas?pattern=" + encodeURIComponent(pattern), { method: "DELETE" });
+    await cargar();
+    avisar(r.decisiones_actualizadas ? `Regla borrada. ${r.decisiones_actualizadas} mails vuelven a quedar pendientes para la IA.` : "Regla borrada.");
+  } catch (e) { avisar(e.message); }
+}
+
+function abrirDialogo(email) {
+  const f = $("form-dialogo"), dominio = email.split("@").pop();
+  f.pattern.replaceChildren(el("option", { value: email }, `Solo ${email}`), el("option", { value: dominio }, `Todo ${dominio}`));
+  f.action.replaceChildren(...estado.acciones.map((a) => el("option", { value: a }, NOMBRES[a])));
+  $("dialogo").showModal();
+}
+$("dialogo").addEventListener("close", () => {
+  const f = $("form-dialogo");
+  if ($("dialogo").returnValue === "guardar") guardarRegla(f.pattern.value, f.action.value);
+});
+$("form-regla").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  await guardarRegla(f.pattern.value, f.action.value, f.note.value);
+  f.pattern.value = ""; f.note.value = "";
+});
+$("buscar-mails").addEventListener("input", pintarMails);
+$("buscar-contactos").addEventListener("input", pintarContactos);
+for (const b of document.querySelectorAll("nav button")) {
+  b.addEventListener("click", () => {
+    for (const o of document.querySelectorAll("nav button")) {
+      o.setAttribute("aria-selected", String(o === b));
+      $("vista-" + o.dataset.vista).hidden = o !== b;
+    }
+  });
+}
+cargar().catch((e) => avisar(e.message));
+</script>
+</body>
+</html>

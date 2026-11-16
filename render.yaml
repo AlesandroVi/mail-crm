@@ -1,0 +1,27 @@
+# Le dice a Render como construir y arrancar el panel.
+# Los secretos NO van aca: se cargan a mano en Render (Environment).
+services:
+  - type: web
+    name: mail-crm
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m mail_crm.panel
+    healthCheckPath: /salud
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.13.5
+      - key: PANEL_HOST
+        value: 0.0.0.0
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: GMAIL_TOKEN_JSON
+        sync: false
+      - key: PANEL_CLAVE_HASH
+        sync: false
+      - key: PANEL_SECRETO
+        sync: false
+      - key: TAREA_TOKEN
+        sync: false

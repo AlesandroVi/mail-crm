@@ -1,0 +1,20 @@
+# Secretos: nunca subirlos a ningun lado
+credentials.json
+token.json
+client_secret*.json
+.env
+*.env
+!.env.example
+
+# Notas personales (por ejemplo, donde anotaste contraseñas): nunca se suben.
+# La unica excepcion es la lista de dependencias.
+*.txt
+!requirements.txt
+
+# Datos locales (contienen tus mails)
+*.db
+
+# Python
+.venv/
+__pycache__/
+*.pyc
