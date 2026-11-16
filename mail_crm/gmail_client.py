@@ -24,18 +24,31 @@ def _credenciales_guardadas():
 
     En tu PC esta en token.json; en un servidor, en la variable GMAIL_TOKEN_JSON.
     """
+    datos, _ = _leer_token()
+    return Credentials.from_authorized_user_info(datos, config.GMAIL_SCOPES) if datos else None
+
+
+def _leer_token() -> tuple[dict | None, str]:
+    """Devuelve (datos del token, "") o (None, motivo). El motivo nunca incluye secretos."""
+    if config.GMAIL_TOKEN_JSON:
+        texto, origen = config.GMAIL_TOKEN_JSON.strip(), "la variable GMAIL_TOKEN_JSON"
+    elif config.TOKEN_PATH.exists():
+        try:
+            texto, origen = config.TOKEN_PATH.read_text(encoding="utf-8").strip(), "token.json"
+        except OSError:
+            return None, "No se pudo leer token.json."
+    else:
+        return None, "No hay sesion de Gmail guardada (falta token.json o la variable GMAIL_TOKEN_JSON)."
     try:
-        if config.GMAIL_TOKEN_JSON:
-            datos = json.loads(config.GMAIL_TOKEN_JSON)
-        elif config.TOKEN_PATH.exists():
-            datos = json.loads(config.TOKEN_PATH.read_text(encoding="utf-8"))
-        else:
-            return None
-    except (ValueError, OSError):
-        return None
-    if not isinstance(datos, dict) or not set(config.GMAIL_SCOPES) <= set(datos.get("scopes", [])):
-        return None  # el token es de cuando la app pedia otros permisos
-    return Credentials.from_authorized_user_info(datos, config.GMAIL_SCOPES)
+        datos = json.loads(texto)
+    except ValueError:
+        forma = f"{len(texto)} caracteres, empieza con llave: {texto.startswith('{')}, termina con llave: {texto.endswith('}')}"
+        return None, f"El contenido de {origen} esta incompleto o mal pegado ({forma})."
+    if not isinstance(datos, dict) or not datos.get("refresh_token"):
+        return None, f"Al contenido de {origen} le faltan datos (no tiene refresh_token)."
+    if not set(config.GMAIL_SCOPES) <= set(datos.get("scopes", [])):
+        return None, f"La sesion guardada en {origen} es de cuando la app pedia otros permisos."
+    return datos, ""
 
 
 def obtener_servicio(interactivo: bool = True):
@@ -47,16 +60,18 @@ def obtener_servicio(interactivo: bool = True):
     sesion, lanza FaltaAutorizacion (lo usa el panel web).
     """
     creds = _credenciales_guardadas()
+    motivo = _leer_token()[1]
 
     if creds and not creds.valid and creds.refresh_token:
         try:
             creds.refresh(Request())
         except RefreshError:
             creds = None  # la sesion vencio (en modo prueba dura 7 dias)
+            motivo = "Google rechazo la sesion guardada: hay que iniciar sesion de nuevo en la PC."
 
     if not creds or not creds.valid:
         if not interactivo:
-            raise FaltaAutorizacion()
+            raise FaltaAutorizacion(motivo or "La sesion de Gmail no es valida.")
         if not config.CREDENTIALS_PATH.exists():
             raise SystemExit(
                 f"Falta {config.CREDENTIALS_PATH.name}. Segui los pasos del README "

@@ -223,8 +223,8 @@ def _actualizar() -> dict:
     try:
         try:
             traidos = sync.sincronizar(interactivo=False)
-        except gmail_client.FaltaAutorizacion:
-            raise HTTPException(409, "La sesión de Gmail venció o falta autorizarla.")
+        except gmail_client.FaltaAutorizacion as e:
+            raise HTTPException(409, f"No se pudo entrar a Gmail. {e}")
         resultado = clasificar.clasificar_pendientes()
         return {"nuevos": traidos["nuevos"], **resultado}
     finally:
