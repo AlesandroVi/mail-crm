@@ -95,6 +95,8 @@
     input, select { font-size: 16px; } /* evita el zoom automatico de iOS al escribir */
   }
   #confirmar-detalle div { margin-top: 8px; }
+  #btn-actualizar { margin-left: auto; }
+  .nota-deshacer { margin-top: 10px; }
 </style>
 </head>
 <body>
@@ -102,7 +104,7 @@
   <header>
     <h1>Mail CRM</h1>
     <span class="modo">Nada cambia en Gmail hasta que lo confirmes</span>
-    <button class="btn" id="btn-actualizar" style="margin-left:auto">Actualizar</button>
+    <button class="btn" id="btn-actualizar">Actualizar</button>
     <button class="btn principal" id="btn-aplicar" hidden></button>
     <button class="btn" id="btn-salir" hidden>Cerrar sesión</button>
   </header>
@@ -165,7 +167,7 @@
   <form method="dialog">
     <h2>Aplicar en tu Gmail</h2>
     <div id="confirmar-detalle"></div>
-    <div class="chico" style="margin-top:10px">Todo se puede deshacer desde este panel. La papelera de Gmail guarda los mails 30 días.</div>
+    <div class="chico nota-deshacer">Todo se puede deshacer desde este panel. La papelera de Gmail guarda los mails 30 días.</div>
     <div class="pie">
       <button class="btn" value="cancelar">Cancelar</button>
       <button class="btn principal" value="aplicar">Aplicar</button>
@@ -185,7 +187,9 @@ const $ = (id) => document.getElementById(id);
 function el(tag, attrs = {}, ...hijos) {
   const e = document.createElement(tag);
   for (const [k, v] of Object.entries(attrs)) {
-    if (k === "class") e.className = v; else if (k === "onclick") e.onclick = v; else e.setAttribute(k, v);
+    if (k === "class") e.className = v; else if (k === "onclick") e.onclick = v;
+    else if (k === "style") e.style.cssText = v;  // asi lo permite la politica de seguridad (CSP)
+    else e.setAttribute(k, v);
   }
   for (const h of hijos) e.append(h instanceof Node ? h : document.createTextNode(h ?? ""));
   return e;

@@ -68,6 +68,11 @@ CREATE TABLE IF NOT EXISTS rules (
     created_at  TEXT NOT NULL DEFAULT {ahora}
 );
 
+CREATE TABLE IF NOT EXISTS settings (
+    name   TEXT PRIMARY KEY,
+    value  TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_emails_contact ON emails(contact_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_email ON decisions(email_id);
 """
@@ -85,7 +90,10 @@ class ConexionPostgres:
         from psycopg.rows import dict_row
 
         # prepare_threshold=None: necesario para los "poolers" de conexiones (Supabase).
-        self._c = psycopg.connect(url, autocommit=True, row_factory=dict_row, prepare_threshold=None)
+        # sslmode="require": si la conexion no puede ir cifrada, falla en vez de seguir sin cifrar.
+        self._c = psycopg.connect(
+            url, autocommit=True, row_factory=dict_row, prepare_threshold=None, sslmode="require"
+        )
         self._tx = None
 
     def execute(self, sql: str, parametros=()):
@@ -104,6 +112,20 @@ class ConexionPostgres:
 
     def close(self) -> None:
         self._c.close()
+
+
+def leer_ajuste(conn, nombre: str, defecto: str = "") -> str:
+    fila = conn.execute("SELECT value FROM settings WHERE name = ?", (nombre,)).fetchone()
+    return fila["value"] if fila else defecto
+
+
+def guardar_ajuste(conn, nombre: str, valor: str) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO settings (name, value) VALUES (?, ?) "
+            "ON CONFLICT (name) DO UPDATE SET value = excluded.value",
+            (nombre, valor),
+        )
 
 
 _esquema_listo: set[str] = set()

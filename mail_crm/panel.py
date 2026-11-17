@@ -6,8 +6,11 @@ En tu PC el servidor solo escucha en 127.0.0.1: nadie mas en la red puede entrar
 Si definiste una contraseña (python -m mail_crm.clave), el panel la pide al entrar.
 En un servidor de internet (PANEL_HOST=0.0.0.0) la contraseña es obligatoria.
 """
+import base64
+import hashlib
 import hmac
 import re
+import secrets
 import threading
 from collections import Counter
 from pathlib import Path
@@ -24,6 +27,7 @@ WEB = Path(__file__).parent / "web"
 # mail exacto (a@b.com) o dominio (b.com)
 PATRON_VALIDO = re.compile(r"^([a-z0-9._%+-]+@)?[a-z0-9-]+(\.[a-z0-9-]+)+$")
 COOKIE = "sesion"
+COOKIE_DISPOSITIVO = "dispositivo"
 # Lo unico que se puede ver sin iniciar sesion.
 RUTAS_PUBLICAS = {"/login", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/salud",
                   "/api/tarea/actualizar"}  # esta ultima se protege con su propio token
@@ -40,15 +44,54 @@ def _es_https(request: Request) -> bool:
     return request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
 
 
-def _ip(request: Request) -> str:
-    """IP de quien hace el pedido. En un hosting llega en X-Forwarded-For."""
-    if config.PANEL_HOST != "127.0.0.1" and request.headers.get("x-forwarded-for"):
-        return request.headers["x-forwarded-for"].split(",")[0].strip()
-    return request.client.host if request.client else "desconocida"
+_version: str | None = None
 
 
-@app.middleware("http")
-async def seguridad(request: Request, call_next):
+def _sello() -> str:
+    """Lo que hace validas a las sesiones. Si cambia, todas las cookies anteriores dejan de servir.
+
+    Tiene dos partes: una version guardada en la base (cambia al cerrar sesion)
+    y el hash de la contraseña (cambia al cambiar la contraseña).
+    """
+    global _version
+    if _version is None:
+        conn = db.conectar()
+        try:
+            _version = db.leer_ajuste(conn, "version_sesion", "0")
+        finally:
+            conn.close()
+    return f"{_version}:{config.PANEL_CLAVE_HASH}"
+
+
+def _sesion_ok(request: Request) -> bool:
+    return auth.sesion_valida(config.PANEL_SECRETO, request.cookies.get(COOKIE), _sello())
+
+
+def _politica_de_contenido() -> str:
+    """Content-Security-Policy: el navegador solo ejecuta los scripts y estilos de nuestras paginas.
+
+    Cada <script> y <style> se identifica por su huella (sha256). Un script que
+    alguien lograra colar en la pagina no tiene huella conocida y no corre.
+    """
+    huellas = {"script": set(), "style": set()}
+    for pagina in ("index.html", "login.html"):
+        html = (WEB / pagina).read_text(encoding="utf-8").replace("\r\n", "\n")  # como lo lee el navegador
+        for tipo, texto in re.findall(r"<(script|style)>(.*?)</\1>", html, re.S):
+            huellas[tipo].add("'sha256-" + base64.b64encode(hashlib.sha256(texto.encode("utf-8")).digest()).decode() + "'")
+    return (
+        "default-src 'none'; "
+        f"script-src {' '.join(sorted(huellas['script']))}; "
+        f"style-src {' '.join(sorted(huellas['style']))}; "
+        "img-src 'self'; connect-src 'self'; manifest-src 'self'; "
+        "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+    )
+
+
+CSP = _politica_de_contenido()
+
+
+def _rechazo(request: Request):
+    """Devuelve la respuesta de rechazo si el pedido no puede pasar, o None si puede."""
     # 1) Rechaza cambios pedidos desde otra pagina web abierta en tu navegador.
     if request.method not in ("GET", "HEAD"):
         origen = request.headers.get("origin")
@@ -57,16 +100,23 @@ async def seguridad(request: Request, call_next):
 
     # 2) Si hay contraseña definida, todo lo demas exige una sesion valida.
     ruta = request.url.path
-    if login_activo() and ruta not in RUTAS_PUBLICAS:
-        if not auth.sesion_valida(config.PANEL_SECRETO, request.cookies.get(COOKIE)):
-            if ruta.startswith("/api/"):
-                return JSONResponse({"detail": "Tenes que iniciar sesion."}, status_code=401)
-            return RedirectResponse("/login", status_code=303)
+    if login_activo() and ruta not in RUTAS_PUBLICAS and not _sesion_ok(request):
+        if ruta.startswith("/api/"):
+            return JSONResponse({"detail": "Tenes que iniciar sesion."}, status_code=401)
+        return RedirectResponse("/login", status_code=303)
+    return None
 
-    respuesta = await call_next(request)
+
+@app.middleware("http")
+async def seguridad(request: Request, call_next):
+    respuesta = _rechazo(request) or await call_next(request)
+    # Las cabeceras de seguridad van en TODAS las respuestas, tambien en los rechazos.
     respuesta.headers["X-Content-Type-Options"] = "nosniff"
     respuesta.headers["X-Frame-Options"] = "DENY"
     respuesta.headers["Referrer-Policy"] = "no-referrer"
+    respuesta.headers["Content-Security-Policy"] = CSP
+    if _es_https(request):  # el navegador recuerda por un año que este sitio solo se usa por https
+        respuesta.headers["Strict-Transport-Security"] = "max-age=31536000"
     return respuesta
 
 
@@ -77,7 +127,7 @@ def inicio():
 
 @app.get("/login")
 def pagina_login(request: Request):
-    if not login_activo() or auth.sesion_valida(config.PANEL_SECRETO, request.cookies.get(COOKIE)):
+    if not login_activo() or _sesion_ok(request):
         return RedirectResponse("/", status_code=303)
     return FileResponse(WEB / "login.html", headers={"Cache-Control": "no-store"})
 
@@ -90,26 +140,36 @@ class Login(BaseModel):
 def iniciar_sesion(datos: Login, request: Request):
     if not login_activo():
         raise HTTPException(404, "Este panel no usa contraseña.")
-    ip = _ip(request)
-    if intentos.bloqueado(ip):
+    # Un navegador que ya entro bien alguna vez tiene su propia cuenta de intentos.
+    dispositivo = auth.dispositivo_valido(config.PANEL_SECRETO, request.cookies.get(COOKIE_DISPOSITIVO))
+    if intentos.bloqueado(dispositivo):
         raise HTTPException(429, "Demasiados intentos fallidos. Esperá 15 minutos y probá de nuevo.")
     if not auth.verificar_clave(datos.clave, config.PANEL_CLAVE_HASH):
-        intentos.registrar_fallo(ip)
+        intentos.registrar_fallo(dispositivo)
         raise HTTPException(401, "Contraseña incorrecta.")
     respuesta = JSONResponse({"ok": True})
+    opciones = {"httponly": True, "samesite": "lax", "secure": _es_https(request)}  # httponly: el JavaScript no puede leerla
     respuesta.set_cookie(
-        COOKIE,
-        auth.crear_sesion(config.PANEL_SECRETO),
-        max_age=auth.DIAS_DE_SESION * 86400,
-        httponly=True,  # el JavaScript de la pagina no puede leerla
-        samesite="lax",
-        secure=_es_https(request),
+        COOKIE, auth.crear_sesion(config.PANEL_SECRETO, _sello()), max_age=auth.DIAS_DE_SESION * 86400, **opciones
     )
+    if not dispositivo:
+        respuesta.set_cookie(
+            COOKIE_DISPOSITIVO, auth.crear_dispositivo(config.PANEL_SECRETO), max_age=365 * 86400, **opciones
+        )
     return respuesta
 
 
 @app.post("/logout")
 def cerrar_sesion():
+    """Cierra la sesion en TODOS los dispositivos: cambia la version y las cookies viejas dejan de valer."""
+    global _version
+    nueva = secrets.token_hex(8)
+    conn = db.conectar()
+    try:
+        db.guardar_ajuste(conn, "version_sesion", nueva)
+    finally:
+        conn.close()
+    _version = nueva
     respuesta = JSONResponse({"ok": True})
     respuesta.delete_cookie(COOKIE)
     return respuesta
