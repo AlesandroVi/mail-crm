@@ -40,8 +40,12 @@
   nav button { background: none; border: 0; border-bottom: 2px solid transparent; padding: 8px 14px;
                font: inherit; color: var(--suave); cursor: pointer; }
   nav button[aria-selected="true"] { color: var(--texto); border-bottom-color: var(--acento); font-weight: 600; }
-  input, select { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--borde);
+  input, select, textarea { font: inherit; color: inherit; background: var(--panel); border: 1px solid var(--borde);
                   border-radius: 8px; padding: 7px 10px; }
+  textarea { display: block; width: 100%; min-height: 220px; margin-top: 12px; resize: vertical; line-height: 1.5; }
+  textarea:read-only { background: var(--fondo); }
+  [hidden] { display: none !important; }
+  .botones { display: flex; gap: 6px; flex-wrap: wrap; }
   .buscar { width: 100%; max-width: 360px; margin-bottom: 12px; }
   .tabla { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; overflow-x: auto; }
   table { width: 100%; border-collapse: collapse; }
@@ -65,6 +69,7 @@
   form.regla input[name="note"] { flex: 1 1 160px; }
   dialog { border: 1px solid var(--borde); border-radius: 12px; background: var(--panel); color: var(--texto);
            padding: 20px; width: min(440px, calc(100vw - 32px)); }
+  dialog.ancho { width: min(640px, calc(100vw - 32px)); }
   dialog::backdrop { background: rgb(0 0 0 / 0.45); }
   dialog h2 { margin: 0 0 4px; font-size: 17px; }
   dialog label { display: block; margin-top: 12px; font-size: 13px; color: var(--suave); }
@@ -92,7 +97,8 @@
     td:empty { display: none; }
     td .btn { margin-top: 6px; padding: 8px 12px; }
     form.regla > * { flex: 1 1 100%; }
-    input, select { font-size: 16px; } /* evita el zoom automatico de iOS al escribir */
+    input, select, textarea { font-size: 16px; } /* evita el zoom automatico de iOS al escribir */
+    dialog .pie { flex-wrap: wrap; }
   }
   #confirmar-detalle div { margin-top: 8px; }
   #btn-actualizar { margin-left: auto; }
@@ -173,6 +179,21 @@
       <button class="btn principal" value="aplicar">Aplicar</button>
     </div>
   </form>
+</dialog>
+<dialog id="redactar" class="ancho">
+  <h2 id="redactar-titulo"></h2>
+  <div class="chico" id="redactar-asunto"></div>
+  <textarea id="redactar-texto" aria-label="Texto del borrador"></textarea>
+  <label id="redactar-pedido">Qué querés decirle (opcional)
+    <input id="redactar-indicaciones" maxlength="500" placeholder="Ej.: que sí, que puedo el jueves a las 10">
+  </label>
+  <div class="chico nota-deshacer" id="redactar-nota"></div>
+  <div class="pie">
+    <button class="btn" id="redactar-cerrar">Cerrar</button>
+    <button class="btn" id="redactar-otra">Redactar de nuevo</button>
+    <button class="btn" id="redactar-quitar">Borrar de Gmail</button>
+    <button class="btn principal" id="redactar-guardar">Guardar en Gmail</button>
+  </div>
 </dialog>
 <div id="aviso" role="status"></div>
 
@@ -290,13 +311,81 @@ function pintarMails() {
       el("td", { class: "num chico" }, fecha(m.received_at)),
       el("td", {}, el("div", { class: "remitente" }, m.from_name || m.from_email),
                    el("div", {}, m.subject || "(sin asunto)"), el("div", { class: "chico" }, m.from_email)),
-      el("td", {}, etiqueta(m.action), m.applied ? el("div", { class: "chico" }, "Aplicada en Gmail") : ""),
+      el("td", {}, etiqueta(m.action), m.applied ? el("div", { class: "chico" }, "Aplicada en Gmail") : "",
+                   m.gmail_draft_id ? el("div", { class: "chico" }, "Borrador guardado en Gmail") : ""),
       el("td", { class: "chico" }, m.reason || "Todavía no se clasificó."),
-      el("td", {}, m.applied
-        ? el("button", { class: "btn", onclick: () => deshacer(m.decision_id) }, "Deshacer")
-        : el("button", { class: "btn", onclick: () => abrirDialogo(m.from_email) }, "Crear regla"))));
+      el("td", {}, el("div", { class: "botones" },
+        SE_RESPONDE.includes(m.action)
+          ? el("button", { class: m.action === "borrador" && !m.draft_body ? "btn principal" : "btn",
+                           onclick: () => abrirRedactor(m) }, m.draft_body ? "Ver borrador" : "Redactar respuesta")
+          : "",
+        m.applied
+          ? el("button", { class: "btn", onclick: () => deshacer(m.decision_id) }, "Deshacer")
+          : el("button", { class: "btn", onclick: () => abrirDialogo(m.from_email) }, "Crear regla")))));
   }
 }
+
+// --- Borradores de respuesta: la IA redacta, vos corregis, y se guarda en Gmail sin enviar. ---
+const SE_RESPONDE = ["borrador", "dejar", "destacar", "ninguna"];  // mails a los que tiene sentido contestar
+let enRedactor = null;  // el mail que esta abierto en el dialogo
+
+function abrirRedactor(m) {
+  enRedactor = m;
+  $("redactar-titulo").textContent = `Respuesta para ${m.from_name || m.from_email}`;
+  $("redactar-asunto").textContent = m.subject || "(sin asunto)";
+  $("redactar-indicaciones").value = "";
+  pintarRedactor();
+  $("redactar").showModal();
+  if (!m.draft_body) redactar();
+}
+
+function pintarRedactor(ocupado = "") {
+  const m = enRedactor, enGmail = Boolean(m.gmail_draft_id);
+  const texto = $("redactar-texto");
+  if (ocupado) texto.value = ocupado; else if (texto.value !== (m.draft_body || "")) texto.value = m.draft_body || "";
+  texto.readOnly = enGmail || Boolean(ocupado);
+  $("redactar-pedido").hidden = enGmail;
+  $("redactar-otra").hidden = enGmail;
+  $("redactar-guardar").hidden = enGmail;
+  $("redactar-quitar").hidden = !enGmail;
+  for (const id of ["redactar-otra", "redactar-guardar", "redactar-quitar"]) $(id).disabled = Boolean(ocupado);
+  $("redactar-nota").textContent = enGmail
+    ? "Ya está en los borradores de tu Gmail. Para cambiarlo, editalo en Gmail o borralo acá y redactalo de nuevo."
+    : "Podés corregir el texto antes de guardarlo. Se guarda como borrador: no se envía hasta que lo mandes vos desde Gmail.";
+}
+
+async function pedirBorrador(ruta, cuerpo, ocupado) {
+  const m = enRedactor;
+  pintarRedactor(ocupado);
+  try {
+    const r = await api("/api/borrador/" + ruta, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                   body: JSON.stringify({ email_id: m.email_id, ...cuerpo }) });
+    await cargar();
+    // cargar() trae los mails de nuevo: buscamos el mismo mail para mostrar su estado actual.
+    if (enRedactor === m) enRedactor = estado.mails.find((x) => x.email_id === m.email_id) || m;
+    return r;
+  } catch (e) { avisar(e.message); return null; }
+  finally { if (enRedactor) pintarRedactor(); }
+}
+
+async function redactar() {
+  const r = await pedirBorrador("redactar", { indicaciones: $("redactar-indicaciones").value }, "Redactando…");
+  if (r) $("redactar-texto").focus();
+}
+$("redactar-otra").addEventListener("click", redactar);
+$("redactar-guardar").addEventListener("click", async () => {
+  const texto = $("redactar-texto").value.trim();
+  if (!texto) { avisar("El borrador está vacío."); return; }
+  enRedactor.draft_body = texto;  // si falla, no se pierde lo que corregiste
+  const r = await pedirBorrador("guardar", { texto }, texto);
+  if (r) avisar(`Borrador guardado en Gmail, dirigido a ${r.para}.`);
+});
+$("redactar-quitar").addEventListener("click", async () => {
+  const r = await pedirBorrador("borrar", {}, $("redactar-texto").value);
+  if (r) avisar("Borrador borrado de Gmail. El texto sigue acá.");
+});
+$("redactar-cerrar").addEventListener("click", () => $("redactar").close());
+$("redactar").addEventListener("close", () => { enRedactor = null; });
 
 function pintarContactos() {
   const q = $("buscar-contactos").value.trim().toLowerCase();

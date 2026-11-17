@@ -97,5 +97,13 @@ PERFIL_USUARIO = (
     "de contactos y la actividad de redes sociales no le interesan: son 'notificacion'."
 )
 
+# --- Borradores de respuesta ---
+# La IA redacta el texto; la app lo guarda en Gmail como borrador y NUNCA lo envia.
+CUERPO_PARA_BORRADOR = 4_000  # caracteres del mail recibido que ve la IA al redactar
+MAX_BORRADOR = 10_000         # largo maximo del borrador (caracteres)
+MAX_INDICACIONES = 500        # largo maximo de lo que le pedis a la IA
+# Nombre con el que se firman los borradores. Se puede cambiar en .env
+FIRMA_BORRADOR = os.environ.get("FIRMA_BORRADOR", "Alesandro")
+
 # Si la IA no esta bastante segura, no se hace nada con ese mail.
 CONFIANZA_MINIMA = 0.8

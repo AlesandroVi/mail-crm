@@ -4,11 +4,13 @@ Funciona con dos motores usando el mismo codigo:
   - SQLite: un archivo local (crm.db). Es lo que se usa en tu PC.
   - Postgres: una base en la nube. Se usa cuando existe la variable DATABASE_URL.
 
-Cuatro tablas:
+Tablas:
   contacts  -> una fila por persona/remitente (el corazon de un CRM)
   emails    -> cada mail recibido, enlazado a su contacto
   decisions -> lo que la app decidio hacer con cada mail y por que
   rules     -> tus reglas por remitente
+  drafts    -> el borrador de respuesta de cada mail (como mucho uno por mail)
+  settings  -> ajustes sueltos de la app
 """
 import sqlite3
 from pathlib import Path
@@ -71,6 +73,15 @@ CREATE TABLE IF NOT EXISTS rules (
 CREATE TABLE IF NOT EXISTS settings (
     name   TEXT PRIMARY KEY,
     value  TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS drafts (
+    id              {pk},
+    email_id        INTEGER NOT NULL UNIQUE REFERENCES emails(id),
+    body            TEXT NOT NULL,
+    model           TEXT,
+    gmail_draft_id  TEXT,
+    created_at      TEXT NOT NULL DEFAULT {ahora}
 );
 
 CREATE INDEX IF NOT EXISTS idx_emails_contact ON emails(contact_id);
@@ -377,15 +388,53 @@ def mails_con_decision(conn: sqlite3.Connection, limite: int = 300) -> list[sqli
         """
         SELECT e.id AS email_id, e.subject, e.snippet, e.received_at,
                c.email AS from_email, c.name AS from_name,
-               d.id AS decision_id, d.category, d.action, d.reason, d.model, d.dry_run, d.applied
+               d.id AS decision_id, d.category, d.action, d.reason, d.model, d.dry_run, d.applied,
+               b.body AS draft_body, b.gmail_draft_id
         FROM emails e
         JOIN contacts c ON c.id = e.contact_id
         LEFT JOIN decisions d ON d.id = (SELECT MAX(id) FROM decisions WHERE email_id = e.id)
+        LEFT JOIN drafts b ON b.email_id = e.id
         ORDER BY e.received_at DESC
         LIMIT ?
         """,
         (limite,),
     ).fetchall()
+
+
+# --- Borradores de respuesta ----------------------------------------------
+# `gmail_draft_id` vacio = el texto solo existe en el panel.
+# Con valor = ya esta guardado como borrador en Gmail.
+
+def mail_para_responder(conn: sqlite3.Connection, email_id: int):
+    """El mail recibido (con su remitente) y su borrador, si ya tiene uno."""
+    return conn.execute(
+        """
+        SELECT e.id, e.gmail_id, e.subject, e.snippet, e.body,
+               c.email AS from_email, c.name AS from_name,
+               b.body AS draft_body, b.gmail_draft_id
+        FROM emails e
+        JOIN contacts c ON c.id = e.contact_id
+        LEFT JOIN drafts b ON b.email_id = e.id
+        WHERE e.id = ?
+        """,
+        (email_id,),
+    ).fetchone()
+
+
+def guardar_borrador(conn: sqlite3.Connection, email_id: int, texto: str, modelo: str | None = None) -> None:
+    """Guarda (o reemplaza) el texto del borrador. Sin `modelo` conserva el que ya tenia."""
+    with conn:
+        conn.execute(
+            "INSERT INTO drafts (email_id, body, model) VALUES (?, ?, ?) "
+            "ON CONFLICT(email_id) DO UPDATE SET body = excluded.body, "
+            "model = COALESCE(excluded.model, drafts.model)",
+            (email_id, texto, modelo),
+        )
+
+
+def marcar_borrador_en_gmail(conn: sqlite3.Connection, email_id: int, gmail_draft_id: str | None) -> None:
+    with conn:
+        conn.execute("UPDATE drafts SET gmail_draft_id = ? WHERE email_id = ?", (gmail_draft_id, email_id))
 
 
 def todos_los_contactos(conn: sqlite3.Connection) -> list[sqlite3.Row]:

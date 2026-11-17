@@ -1,7 +1,8 @@
 """Clasificador de mails con Gemini.
 
 Este es el UNICO archivo que sabe que usamos Gemini. Para cambiar de proveedor
-(Ollama, Claude, etc.) alcanza con reescribir `_llamar_modelo`.
+(Ollama, Claude, etc.) alcanza con reescribir `llamar_modelo`.
+El redactor de borradores (redactor.py) usa esa misma funcion.
 
 Uso:  python -m mail_crm.clasificador   -> lista los modelos disponibles con tu clave
 """
@@ -90,7 +91,7 @@ def clasificar_lote(mails: list[dict]) -> dict[int, dict]:
         }
         for m in mails
     ]
-    texto = _llamar_modelo("Mails a clasificar (JSON):\n" + json.dumps(entrada, ensure_ascii=False))
+    texto = llamar_modelo("Mails a clasificar (JSON):\n" + json.dumps(entrada, ensure_ascii=False))
 
     try:
         resultados = json.loads(texto)
@@ -145,20 +146,25 @@ def _pedir(url: str, cuerpo: dict | None = None) -> dict:
             raise ErrorIA(f"No se pudo conectar con Gemini: {e.reason}") from e
 
 
-def _llamar_modelo(mensaje: str) -> str:
-    """Manda el mensaje a Gemini y devuelve el texto (JSON) de la respuesta.
+def llamar_modelo(
+    mensaje: str,
+    instrucciones: str = INSTRUCCIONES,
+    esquema: dict | None = ESQUEMA_RESPUESTA,
+    temperatura: float = 0,
+) -> str:
+    """Manda el mensaje a Gemini y devuelve el texto de la respuesta.
 
+    Con `esquema` la respuesta es JSON con esa forma; con esquema=None es texto libre.
     Si el modelo principal esta saturado o sin cuota, prueba con los de respaldo.
     """
     global modelo_usado
+    generacion: dict = {"temperature": temperatura}
+    if esquema is not None:
+        generacion |= {"responseMimeType": "application/json", "responseSchema": esquema}
     cuerpo = {
-        "systemInstruction": {"parts": [{"text": INSTRUCCIONES}]},
+        "systemInstruction": {"parts": [{"text": instrucciones}]},
         "contents": [{"role": "user", "parts": [{"text": mensaje}]}],
-        "generationConfig": {
-            "temperature": 0,
-            "responseMimeType": "application/json",
-            "responseSchema": ESQUEMA_RESPUESTA,
-        },
+        "generationConfig": generacion,
     }
     # Empezamos por el ultimo modelo que funciono, para no insistir con uno caido.
     candidatos = [modelo_usado, config.GEMINI_MODEL, *config.GEMINI_MODELOS_RESPALDO]

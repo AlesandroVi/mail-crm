@@ -1,9 +1,11 @@
-"""Conexion con Gmail: inicio de sesion (OAuth) y lectura de mails."""
+"""Conexion con Gmail: inicio de sesion (OAuth), lectura de mails y borradores."""
 import base64
 import html
 import json
 import re
 from datetime import datetime, timezone
+from email.header import decode_header, make_header
+from email.message import EmailMessage
 from email.utils import parseaddr
 
 from google.auth.exceptions import RefreshError
@@ -11,6 +13,7 @@ from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import InstalledAppFlow
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 from . import config
 
@@ -159,3 +162,65 @@ def _extraer_cuerpo(payload: dict) -> str:
     sin_bloques = re.sub(r"(?is)<(script|style|head)[^>]*>.*?</\1>", " ", crudo_html)
     sin_tags = re.sub(r"(?s)<[^>]+>", " ", sin_bloques)
     return re.sub(r"\s+", " ", html.unescape(sin_tags)).strip()
+
+
+def _limpio(valor: str) -> str:
+    """Una cabecera en una sola linea y legible (sin saltos de linea ni codificaciones raras)."""
+    try:
+        valor = str(make_header(decode_header(valor)))
+    except Exception:  # cabecera mal formada: la usamos tal cual
+        pass
+    return " ".join(valor.split())
+
+
+def crear_borrador(servicio, gmail_id: str, texto: str) -> tuple[str, str]:
+    """Guarda en Gmail un borrador de respuesta al mail `gmail_id`. NO lo envia.
+
+    El destinatario y el asunto salen del mail original, nunca de la IA.
+    Devuelve (id del borrador, direccion a la que quedo dirigido).
+    """
+    original = (
+        servicio.users()
+        .messages()
+        .get(
+            userId="me",
+            id=gmail_id,
+            format="metadata",
+            metadataHeaders=["From", "Reply-To", "Subject", "Message-ID", "References"],
+        )
+        .execute()
+    )
+    cabeceras = {h["name"].lower(): _limpio(h["value"]) for h in original.get("payload", {}).get("headers", [])}
+    # Igual que el boton "Responder" de Gmail: si el mail pide que le contesten a otra direccion, va ahi.
+    destinatario = parseaddr(cabeceras.get("reply-to") or cabeceras.get("from", ""))[1]
+    if not destinatario:
+        raise ValueError("El mail original no tiene una direccion a la cual responder.")
+    asunto = cabeceras.get("subject", "")
+    if not asunto.lower().startswith("re:"):
+        asunto = f"Re: {asunto}".strip()
+
+    mensaje = EmailMessage()
+    mensaje["To"] = destinatario
+    mensaje["Subject"] = asunto
+    if cabeceras.get("message-id"):  # asi Gmail lo muestra dentro de la misma conversacion
+        mensaje["In-Reply-To"] = cabeceras["message-id"]
+        mensaje["References"] = f"{cabeceras.get('references', '')} {cabeceras['message-id']}".strip()
+    mensaje.set_content(texto)
+
+    crudo = base64.urlsafe_b64encode(mensaje.as_bytes()).decode("ascii")
+    borrador = (
+        servicio.users()
+        .drafts()
+        .create(userId="me", body={"message": {"raw": crudo, "threadId": original.get("threadId")}})
+        .execute()
+    )
+    return borrador["id"], destinatario
+
+
+def borrar_borrador(servicio, borrador_id: str) -> None:
+    """Borra un borrador de Gmail. Si ya no existe (lo borraste o lo enviaste), no pasa nada."""
+    try:
+        servicio.users().drafts().delete(userId="me", id=borrador_id).execute()
+    except HttpError as e:
+        if getattr(e.resp, "status", None) != 404:
+            raise

@@ -28,7 +28,7 @@ def _ejecutar(servicio, gmail_id: str, accion: str, deshacer: bool = False) -> N
         raise ValueError(f"La accion '{accion}' no cambia nada en Gmail")
 
 
-def _explicar(error: HttpError) -> str:
+def explicar(error: HttpError) -> str:
     codigo = getattr(error.resp, "status", None)
     if codigo == 404:
         return "el mail ya no existe en Gmail"
@@ -44,7 +44,7 @@ def aplicar_decisiones(conn, servicio, ids: list[int] | None = None) -> dict:
         try:
             _ejecutar(servicio, d["gmail_id"], d["action"])
         except HttpError as e:
-            errores.append(f"{d['subject'] or '(sin asunto)'}: {_explicar(e)}")
+            errores.append(f"{d['subject'] or '(sin asunto)'}: {explicar(e)}")
             continue
         db.marcar_aplicada(conn, d["id"], True)
         aplicadas += 1
@@ -59,5 +59,5 @@ def deshacer_decision(conn, servicio, decision_id: int) -> None:
     try:
         _ejecutar(servicio, d["gmail_id"], d["action"], deshacer=True)
     except HttpError as e:
-        raise RuntimeError(f"No se pudo deshacer: {_explicar(e)}.") from e
+        raise RuntimeError(f"No se pudo deshacer: {explicar(e)}.") from e
     db.marcar_aplicada(conn, decision_id, False)

@@ -10,7 +10,8 @@ usa una IA para decidir qué hacer con cada mail.
 - [x] Paso 3: clasificar con IA (Gemini) en modo simulación
 - [x] Paso 4: panel web (mails, contactos y reglas)
 - [x] Paso 5: acciones reales desde el panel (papelera, archivar, destacar) con deshacer
-- [ ] Paso 6: borradores de respuesta y aplicación automática
+- [x] Paso 6: borradores de respuesta (la IA redacta, vos corregís y se guardan en Gmail sin enviarse)
+- [ ] Paso 7: aplicación automática
 
 ## Estructura
 

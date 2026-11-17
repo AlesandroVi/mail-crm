@@ -18,9 +18,10 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from googleapiclient.errors import HttpError
+from pydantic import BaseModel, Field
 
-from . import acciones, auth, clasificar, config, db, gmail_client, sync
+from . import acciones, auth, clasificador, clasificar, config, db, gmail_client, redactor, sync
 from .reglas import ACCIONES_DE_REGLA
 
 WEB = Path(__file__).parent / "web"
@@ -342,6 +343,98 @@ def api_deshacer(pedido: Deshacer):
         raise HTTPException(404, str(e))
     except RuntimeError as e:
         raise HTTPException(502, str(e))
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# --- Borradores de respuesta ----------------------------------------------
+# La IA redacta, vos corregis, y recien al tocar "Guardar en Gmail" se crea el
+# borrador. El panel no tiene ninguna forma de ENVIAR un mail.
+
+class Redactar(BaseModel):
+    email_id: int
+    indicaciones: str = Field("", max_length=config.MAX_INDICACIONES)
+
+
+class GuardarBorrador(BaseModel):
+    email_id: int
+    texto: str = Field(min_length=1, max_length=config.MAX_BORRADOR)
+
+
+class BorrarBorrador(BaseModel):
+    email_id: int
+
+
+def _mail_o_404(conn, email_id: int) -> dict:
+    mail = db.mail_para_responder(conn, email_id)
+    if mail is None:
+        raise HTTPException(404, "No existe ese mail.")
+    return dict(mail)
+
+
+@app.post("/api/borrador/redactar")
+def api_redactar(pedido: Redactar):
+    """Le pide a la IA el texto de una respuesta y lo guarda solo en el panel."""
+    conn = db.conectar()
+    try:
+        mail = _mail_o_404(conn, pedido.email_id)
+        if mail["gmail_draft_id"]:
+            raise HTTPException(409, "Ese borrador ya está en Gmail. Borralo de Gmail para redactarlo de nuevo.")
+        try:
+            texto = redactor.redactar_respuesta(mail, pedido.indicaciones)
+        except clasificador.CuotaAgotada:
+            raise HTTPException(429, "Se agotó la cuota gratuita de Gemini por ahora. Probá más tarde.")
+        except clasificador.NoDisponible:
+            raise HTTPException(503, "Gemini está saturado en este momento. Probá en un rato.")
+        except clasificador.ErrorIA as e:
+            print(f"Error al redactar un borrador: {e}")
+            raise HTTPException(502, "La IA no pudo redactar el borrador. Probá de nuevo.")
+        db.guardar_borrador(conn, pedido.email_id, texto, clasificador.modelo_usado)
+    finally:
+        conn.close()
+    return {"texto": texto}
+
+
+@app.post("/api/borrador/guardar")
+def api_guardar_borrador(pedido: GuardarBorrador):
+    """Crea el borrador en Gmail con el texto que quedo en el panel. No envia nada."""
+    texto = pedido.texto.strip()
+    if not texto:
+        raise HTTPException(422, "El borrador está vacío.")
+    servicio = _gmail()
+    conn = db.conectar()
+    try:
+        mail = _mail_o_404(conn, pedido.email_id)
+        if mail["gmail_draft_id"]:
+            raise HTTPException(409, "Ese borrador ya está guardado en Gmail.")
+        db.guardar_borrador(conn, pedido.email_id, texto)
+        try:
+            borrador_id, destinatario = gmail_client.crear_borrador(servicio, mail["gmail_id"], texto)
+        except ValueError as e:
+            raise HTTPException(422, str(e))
+        except HttpError as e:
+            raise HTTPException(502, f"No se pudo guardar el borrador: {acciones.explicar(e)}.")
+        db.marcar_borrador_en_gmail(conn, pedido.email_id, borrador_id)
+    finally:
+        conn.close()
+    return {"ok": True, "para": destinatario}
+
+
+@app.post("/api/borrador/borrar")
+def api_borrar_borrador(pedido: BorrarBorrador):
+    """Saca el borrador de Gmail. El texto queda en el panel por si lo queres volver a usar."""
+    servicio = _gmail()
+    conn = db.conectar()
+    try:
+        mail = _mail_o_404(conn, pedido.email_id)
+        if not mail["gmail_draft_id"]:
+            raise HTTPException(404, "Ese mail no tiene un borrador guardado en Gmail.")
+        try:
+            gmail_client.borrar_borrador(servicio, mail["gmail_draft_id"])
+        except HttpError as e:
+            raise HTTPException(502, f"No se pudo borrar el borrador: {acciones.explicar(e)}.")
+        db.marcar_borrador_en_gmail(conn, pedido.email_id, None)
     finally:
         conn.close()
     return {"ok": True}
