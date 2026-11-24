@@ -24,7 +24,8 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from googleapiclient.errors import HttpError
 from pydantic import BaseModel, Field
 
-from . import acciones, auth, avisos, clasificador, clasificar, config, db, gmail_client, redactor, sync
+from . import (acciones, aprendizaje, auth, avisos, clasificador, clasificar, config, db, estadisticas, etiquetas,
+               gmail_client, redactor, resumen, seguimientos, sync)
 from .reglas import ACCIONES_DE_REGLA
 
 WEB = Path(__file__).parent / "web"
@@ -298,18 +299,28 @@ def api_guardar_notas(contacto_id: int, pedido: Notas):
 # --- Ajustes ---------------------------------------------------------------------
 
 class Ajustes(BaseModel):
-    reglas_automaticas: bool
+    reglas_automaticas: bool | None = None
+    etiquetas_gmail: bool | None = None
+
+
+# Ajuste -> valor por defecto. Las reglas automaticas vienen prendidas; las etiquetas, apagadas.
+AJUSTES = {"reglas_automaticas": "1", "etiquetas_gmail": "0"}
+
+
+def _ajuste(conn, nombre: str) -> bool:
+    return db.leer_ajuste(conn, nombre, AJUSTES[nombre]) == "1"
 
 
 def _reglas_automaticas(conn) -> bool:
-    return db.leer_ajuste(conn, "reglas_automaticas", "1") == "1"
+    return _ajuste(conn, "reglas_automaticas")
 
 
 @app.get("/api/ajustes")
 def api_ajustes():
     conn = db.conectar()
     try:
-        return {"reglas_automaticas": _reglas_automaticas(conn), "dias_de_retencion": config.DIAS_DE_RETENCION}
+        return {**{n: _ajuste(conn, n) for n in AJUSTES}, "dias_de_retencion": config.DIAS_DE_RETENCION,
+                "hora_resumen": config.HORA_RESUMEN, "dias_sin_respuesta": config.DIAS_SIN_RESPUESTA}
     finally:
         conn.close()
 
@@ -318,11 +329,183 @@ def api_ajustes():
 def api_guardar_ajustes(pedido: Ajustes, request: Request):
     conn = db.conectar()
     try:
-        db.guardar_ajuste(conn, "reglas_automaticas", "1" if pedido.reglas_automaticas else "0")
+        for nombre, valor in pedido.model_dump().items():
+            if valor is not None:
+                db.guardar_ajuste(conn, nombre, "1" if valor else "0")
+                _registrar(f"ajuste {nombre} = {'si' if valor else 'no'}", request)
     finally:
         conn.close()
-    _registrar(f"reglas automaticas {'activadas' if pedido.reglas_automaticas else 'desactivadas'}", request)
     return {"ok": True}
+
+
+# --- Tablero de postulaciones ---------------------------------------------------------
+
+class Postulacion(BaseModel):
+    company: str = Field(min_length=1, max_length=100)
+    role: str = Field("", max_length=120)
+    notes: str = Field("", max_length=2000)
+    stage: str = "interesa"
+    email_id: int | None = None
+
+
+class CambioPostulacion(BaseModel):
+    company: str | None = Field(None, min_length=1, max_length=100)
+    role: str | None = Field(None, max_length=120)
+    notes: str | None = Field(None, max_length=2000)
+    stage: str | None = None
+
+
+def _etapa_valida(etapa: str | None) -> None:
+    if etapa is not None and etapa not in config.ETAPAS_POSTULACION:
+        raise HTTPException(422, "Etapa inválida.")
+
+
+@app.get("/api/postulaciones")
+def api_postulaciones():
+    conn = db.conectar()
+    try:
+        return {"postulaciones": [dict(p) for p in db.listar_postulaciones(conn)], "etapas": config.ETAPAS_POSTULACION}
+    finally:
+        conn.close()
+
+
+@app.post("/api/postulaciones")
+def api_crear_postulacion(p: Postulacion):
+    _etapa_valida(p.stage)
+    conn = db.conectar()
+    try:
+        contacto = asunto = None
+        if p.email_id is not None:
+            mail = db.mail_para_responder(conn, p.email_id)
+            if mail is None:
+                raise HTTPException(404, "No existe ese mail.")
+            contacto, asunto = mail["from_email"], mail["subject"]
+        nuevo = db.crear_postulacion(conn, p.company.strip(), p.role.strip(), p.stage, p.notes.strip(),
+                                     p.email_id, contacto, asunto)
+    finally:
+        conn.close()
+    return {"id": nuevo}
+
+
+@app.post("/api/postulaciones/{postulacion_id}")
+def api_cambiar_postulacion(postulacion_id: int, cambio: CambioPostulacion):
+    _etapa_valida(cambio.stage)
+    campos = {k: (v.strip() if isinstance(v, str) else v) for k, v in cambio.model_dump().items()}
+    conn = db.conectar()
+    try:
+        if not db.actualizar_postulacion(conn, postulacion_id, campos):
+            raise HTTPException(404, "No existe esa postulación.")
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.delete("/api/postulaciones/{postulacion_id}")
+def api_borrar_postulacion(postulacion_id: int):
+    conn = db.conectar()
+    try:
+        if not db.borrar_postulacion(conn, postulacion_id):
+            raise HTTPException(404, "No existe esa postulación.")
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# --- Seguimientos y resumen -------------------------------------------------------------
+
+@app.get("/api/seguimientos")
+def api_seguimientos():
+    conn = db.conectar()
+    try:
+        return {"seguimientos": [dict(s) for s in db.seguimientos_pendientes(conn, config.DIAS_SIN_RESPUESTA)],
+                "dias": config.DIAS_SIN_RESPUESTA}
+    finally:
+        conn.close()
+
+
+@app.post("/api/seguimientos/{seguimiento_id}/descartar")
+def api_descartar_seguimiento(seguimiento_id: int):
+    conn = db.conectar()
+    try:
+        if not db.descartar_seguimiento(conn, seguimiento_id):
+            raise HTTPException(404, "No existe ese seguimiento.")
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.get("/api/resumen")
+def api_resumen():
+    conn = db.conectar()
+    try:
+        return {"resumen": resumen.guardado(conn)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/resumen/generar")
+def api_generar_resumen():
+    conn = db.conectar()
+    try:
+        return {"resumen": resumen.generar(conn)}
+    finally:
+        conn.close()
+
+
+# --- Cambiar una decision a mano y sugerencias de reglas ---------------------------------
+
+class CambioDecision(BaseModel):
+    email_id: int
+    action: str
+
+
+@app.post("/api/decisiones/cambiar")
+def api_cambiar_decision(pedido: CambioDecision):
+    if pedido.action not in ACCIONES_DE_REGLA:
+        raise HTTPException(422, f"Accion invalida. Usa una de: {', '.join(ACCIONES_DE_REGLA)}")
+    conn = db.conectar()
+    try:
+        if db.mail_para_responder(conn, pedido.email_id) is None:
+            raise HTTPException(404, "No existe ese mail.")
+        anterior = db.ultima_decision(conn, pedido.email_id)
+        if anterior is not None and anterior["applied"]:
+            raise HTTPException(409, "Esa acción ya se aplicó en Gmail: primero deshacela.")
+        db.guardar_decision(conn, pedido.email_id, "manual", pedido.action, "Elegido por vos", "manual")
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+class IgnorarSugerencia(BaseModel):
+    pattern: str = Field(min_length=3, max_length=200)
+
+
+@app.get("/api/sugerencias")
+def api_sugerencias():
+    conn = db.conectar()
+    try:
+        return {"sugerencias": aprendizaje.sugerencias(conn)}
+    finally:
+        conn.close()
+
+
+@app.post("/api/sugerencias/ignorar")
+def api_ignorar_sugerencia(pedido: IgnorarSugerencia):
+    conn = db.conectar()
+    try:
+        aprendizaje.ignorar(conn, pedido.pattern)
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.get("/api/estadisticas")
+def api_estadisticas():
+    conn = db.conectar()
+    try:
+        return estadisticas.calcular(conn)
+    finally:
+        conn.close()
 
 
 # --- Avisos al celular -------------------------------------------------------------
@@ -470,27 +653,43 @@ def _actualizar() -> dict:
             raise HTTPException(409, f"No se pudo entrar a Gmail. {e}")
         resultado = clasificar.clasificar_pendientes()
         por_categoria = resultado.pop("por_categoria", {})
-        extra = {"aplicadas_por_reglas": 0, "borrados_viejos": 0, "avisos_enviados": 0}
+        extra = {"aplicadas_por_reglas": 0, "borrados_viejos": 0, "avisos_enviados": 0, "etiquetados": 0,
+                 "seguimientos_respondidos": 0, "postulaciones_sugeridas": por_categoria.get("postulacion_sugerida", 0),
+                 "resumen": False}
         conn = db.conectar()
         try:
-            try:
-                if _reglas_automaticas(conn):
-                    hecho = acciones.aplicar_reglas(conn, gmail_client.obtener_servicio(interactivo=False))
-                    extra["aplicadas_por_reglas"] = hecho["aplicadas"]
-                    if hecho["aplicadas"] or hecho["errores"]:
-                        _registrar(f"reglas automaticas: {hecho['aplicadas']} aplicadas, {len(hecho['errores'])} con error")
-            except Exception as e:
-                _registrar(f"no se pudieron aplicar las reglas ({type(e).__name__})")
-            try:
-                extra["borrados_viejos"] = db.limpiar_viejos(conn, config.DIAS_DE_RETENCION, config.MAX_CUERPO)
-            except Exception as e:
-                _registrar(f"no se pudo limpiar la base ({type(e).__name__})")
-            texto = avisos.texto_de_aviso(por_categoria)
-            if texto:
+            def paso(nombre, funcion):
+                """Corre un paso extra; si falla, lo anota y sigue con el resto."""
                 try:
-                    extra["avisos_enviados"] = avisos.enviar(conn, "Mail CRM", texto)
+                    return funcion()
                 except Exception as e:
-                    _registrar(f"no se pudieron mandar los avisos ({type(e).__name__})")
+                    _registrar(f"fallo el paso '{nombre}' ({type(e).__name__})")
+                    return None
+
+            servicio = paso("conectar con Gmail", lambda: gmail_client.obtener_servicio(interactivo=False))
+            if servicio is not None:
+                if _reglas_automaticas(conn):
+                    hecho = paso("reglas automaticas", lambda: acciones.aplicar_reglas(conn, servicio))
+                    if hecho:
+                        extra["aplicadas_por_reglas"] = hecho["aplicadas"]
+                        if hecho["aplicadas"] or hecho["errores"]:
+                            _registrar(f"reglas automaticas: {hecho['aplicadas']} aplicadas, {len(hecho['errores'])} con error")
+                if _ajuste(conn, "etiquetas_gmail"):
+                    extra["etiquetados"] = paso("etiquetas", lambda: etiquetas.etiquetar(servicio, conn)) or 0
+                hecho = paso("seguimientos", lambda: seguimientos.actualizar(servicio, conn))
+                if hecho:
+                    extra["seguimientos_respondidos"] = hecho["respondidos"]
+            extra["borrados_viejos"] = paso("limpieza", lambda: db.limpiar_viejos(
+                conn, config.DIAS_DE_RETENCION, config.MAX_CUERPO)) or 0
+
+            texto = avisos.texto_de_aviso(por_categoria)
+            if resumen.toca_hoy(conn):
+                hecho = paso("resumen diario", lambda: resumen.generar(conn))
+                if hecho:
+                    extra["resumen"] = True
+                    texto = resumen.texto_de_aviso(hecho["cuentas"])  # un solo aviso: el del resumen
+            if texto:
+                extra["avisos_enviados"] = paso("avisos", lambda: avisos.enviar(conn, "Mail CRM", texto)) or 0
         finally:
             conn.close()
         return {"nuevos": traidos["nuevos"], **resultado, **extra}

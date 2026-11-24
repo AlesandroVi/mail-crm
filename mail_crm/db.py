@@ -12,6 +12,8 @@ Tablas:
   drafts    -> el borrador de respuesta de cada mail (como mucho uno por mail)
   settings  -> ajustes sueltos de la app
   push_subscriptions -> los dispositivos que reciben avisos
+  applications -> el tablero de postulaciones laborales
+  followups -> mails que mandaste, para avisarte si no te contestan
 """
 import sqlite3
 from datetime import datetime, timedelta, timezone
@@ -93,6 +95,32 @@ CREATE TABLE IF NOT EXISTS push_subscriptions (
     created_at  TEXT NOT NULL DEFAULT {ahora}
 );
 
+-- email_id y contact_email son solo referencias: la tarjeta sigue aunque el mail se borre por antiguedad.
+CREATE TABLE IF NOT EXISTS applications (
+    id             {pk},
+    company        TEXT NOT NULL,
+    role           TEXT,
+    stage          TEXT NOT NULL,
+    notes          TEXT,
+    email_id       INTEGER,
+    contact_email  TEXT,
+    subject        TEXT,
+    created_at     TEXT NOT NULL DEFAULT {ahora},
+    updated_at     TEXT NOT NULL DEFAULT {ahora}
+);
+
+CREATE TABLE IF NOT EXISTS followups (
+    id          {pk},
+    gmail_id    TEXT NOT NULL UNIQUE,
+    thread_id   TEXT,
+    to_email    TEXT,
+    to_name     TEXT,
+    subject     TEXT,
+    sent_at     TEXT NOT NULL,
+    answered    INTEGER NOT NULL DEFAULT 0,
+    dismissed   INTEGER NOT NULL DEFAULT 0
+);
+
 CREATE INDEX IF NOT EXISTS idx_emails_contact ON emails(contact_id);
 CREATE INDEX IF NOT EXISTS idx_decisions_email ON decisions(email_id);
 """
@@ -103,6 +131,8 @@ COLUMNAS_NUEVAS = [
     ("contacts", "notes", "TEXT"),
     # 1 = deshiciste esta accion: las reglas automaticas no la vuelven a aplicar.
     ("decisions", "undone", "INTEGER NOT NULL DEFAULT 0"),
+    # Etiqueta de Gmail que ya se le puso a este mail (vacio = ninguna todavia).
+    ("emails", "label_applied", "TEXT"),
 ]
 
 # Solo en Supabase: nadie mas que la app (rol postgres) puede leer o escribir las tablas.
@@ -112,7 +142,7 @@ PROTECCION_SUPABASE = """
 DO $$
 DECLARE t text;
 BEGIN
-  FOREACH t IN ARRAY ARRAY['contacts','emails','decisions','rules','settings','drafts','push_subscriptions'] LOOP
+  FOR t IN SELECT tablename FROM pg_tables WHERE schemaname = 'public' LOOP
     EXECUTE format('ALTER TABLE public.%I ENABLE ROW LEVEL SECURITY', t);
   END LOOP;
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
@@ -535,6 +565,7 @@ def limpiar_viejos(conn: sqlite3.Connection, dias: int, max_cuerpo: int) -> int:
         conn.execute(f"DELETE FROM drafts WHERE email_id IN ({viejos})", (limite,))
         conn.execute(f"DELETE FROM decisions WHERE email_id IN ({viejos})", (limite,))
         borrados = conn.execute("DELETE FROM emails WHERE received_at < ?", (limite,)).rowcount
+        conn.execute("DELETE FROM followups WHERE sent_at < ?", (limite,))
         conn.execute(
             "UPDATE emails SET body = substr(body, 1, ?) WHERE length(body) > ?", (max_cuerpo, max_cuerpo)
         )
@@ -560,6 +591,169 @@ def borrar_suscripcion(conn: sqlite3.Connection, endpoint: str) -> bool:
 
 def listar_suscripciones(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT endpoint, data FROM push_subscriptions").fetchall()
+
+
+def _ahora() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+
+
+def hace_dias(dias: float) -> str:
+    """Fecha ISO (UTC) de hace `dias` dias, comparable con received_at y sent_at."""
+    return (datetime.now(timezone.utc) - timedelta(days=dias)).isoformat(timespec="seconds")
+
+
+# --- Postulaciones (tablero) ---------------------------------------------------
+
+def listar_postulaciones(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    return conn.execute(
+        "SELECT id, company, role, stage, notes, email_id, contact_email, subject, created_at, updated_at "
+        "FROM applications ORDER BY updated_at DESC"
+    ).fetchall()
+
+
+def crear_postulacion(conn: sqlite3.Connection, company: str, role: str = "", stage: str = "interesa",
+                      notes: str = "", email_id: int | None = None, contact_email: str | None = None,
+                      subject: str | None = None) -> int:
+    with conn:
+        return conn.execute(
+            "INSERT INTO applications (company, role, stage, notes, email_id, contact_email, subject, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+            (company, role, stage, notes, email_id, contact_email, subject, _ahora(), _ahora()),
+        ).fetchone()["id"]
+
+
+def actualizar_postulacion(conn: sqlite3.Connection, postulacion_id: int, campos: dict) -> bool:
+    """Cambia solo los campos permitidos (company, role, stage, notes)."""
+    permitidos = {k: v for k, v in campos.items() if k in ("company", "role", "stage", "notes") and v is not None}
+    if not permitidos:
+        return conn.execute("SELECT 1 FROM applications WHERE id = ?", (postulacion_id,)).fetchone() is not None
+    asignaciones = ", ".join(f"{k} = ?" for k in permitidos)  # nombres de una lista fija, nunca del usuario
+    with conn:
+        cur = conn.execute(f"UPDATE applications SET {asignaciones}, updated_at = ? WHERE id = ?",
+                           (*permitidos.values(), _ahora(), postulacion_id))
+    return cur.rowcount > 0
+
+
+def borrar_postulacion(conn: sqlite3.Connection, postulacion_id: int) -> bool:
+    with conn:
+        cur = conn.execute("DELETE FROM applications WHERE id = ?", (postulacion_id,))
+    return cur.rowcount > 0
+
+
+def sugerir_postulacion(conn: sqlite3.Connection, email_id: int, company: str, role: str) -> bool:
+    """Agrega una tarjeta 'sugerida' por la IA, salvo que ya exista una para ese mail o esa empresa y puesto."""
+    mail = conn.execute(
+        "SELECT e.subject, c.email FROM emails e JOIN contacts c ON c.id = e.contact_id WHERE e.id = ?", (email_id,)
+    ).fetchone()
+    if mail is None:
+        return False
+    company = company or mail["email"].rsplit("@", 1)[-1]
+    repetida = conn.execute(
+        "SELECT 1 FROM applications WHERE email_id = ? OR (lower(company) = lower(?) AND lower(COALESCE(role, '')) = lower(?))",
+        (email_id, company, role or ""),
+    ).fetchone()
+    if repetida:
+        return False
+    crear_postulacion(conn, company, role or "", "sugerida", "", email_id, mail["email"], mail["subject"])
+    return True
+
+
+# --- Seguimientos ------------------------------------------------------------------
+
+def seguimiento_guardado(conn: sqlite3.Connection, gmail_id: str) -> bool:
+    return conn.execute("SELECT 1 FROM followups WHERE gmail_id = ?", (gmail_id,)).fetchone() is not None
+
+
+def guardar_seguimiento(conn: sqlite3.Connection, s: dict) -> None:
+    with conn:
+        conn.execute(
+            "INSERT INTO followups (gmail_id, thread_id, to_email, to_name, subject, sent_at, answered) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(gmail_id) DO NOTHING",
+            (s["gmail_id"], s["thread_id"], s["to_email"], s["to_name"], s["subject"], s["sent_at"], int(s.get("answered", 0))),
+        )
+
+
+def seguimientos_abiertos(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Los que todavia esperan respuesta (para volver a revisar su conversacion)."""
+    return conn.execute(
+        "SELECT id, gmail_id, thread_id, sent_at FROM followups WHERE answered = 0 AND dismissed = 0"
+    ).fetchall()
+
+
+def marcar_respondido(conn: sqlite3.Connection, seguimiento_id: int) -> None:
+    with conn:
+        conn.execute("UPDATE followups SET answered = 1 WHERE id = ?", (seguimiento_id,))
+
+
+def descartar_seguimiento(conn: sqlite3.Connection, seguimiento_id: int) -> bool:
+    with conn:
+        cur = conn.execute("UPDATE followups SET dismissed = 1 WHERE id = ?", (seguimiento_id,))
+    return cur.rowcount > 0
+
+
+def seguimientos_pendientes(conn: sqlite3.Connection, dias: int) -> list[sqlite3.Row]:
+    """Mails tuyos sin respuesta hace mas de `dias` dias."""
+    return conn.execute(
+        "SELECT id, to_email, to_name, subject, sent_at FROM followups "
+        "WHERE answered = 0 AND dismissed = 0 AND sent_at < ? ORDER BY sent_at",
+        (hace_dias(dias),),
+    ).fetchall()
+
+
+# --- Decisiones que cambias a mano y sugerencias de reglas -------------------------
+
+def ultima_decision(conn: sqlite3.Connection, email_id: int):
+    return conn.execute(
+        "SELECT * FROM decisions WHERE id = (SELECT MAX(id) FROM decisions WHERE email_id = ?)", (email_id,)
+    ).fetchone()
+
+
+def historial_de_decisiones(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Todas las decisiones con su remitente, en orden (para buscar patrones)."""
+    return conn.execute(
+        "SELECT d.id, d.email_id, d.category, d.action, d.model, d.applied, d.undone, c.email "
+        "FROM decisions d JOIN emails e ON e.id = d.email_id JOIN contacts c ON c.id = e.contact_id "
+        "ORDER BY d.email_id, d.id"
+    ).fetchall()
+
+
+# --- Etiquetas de Gmail -------------------------------------------------------------
+
+def mails_para_etiquetar(conn: sqlite3.Connection, categorias: list[str], limite: int = 100) -> list[sqlite3.Row]:
+    """Mails cuya ultima decision es de la IA, con categoria conocida y todavia sin etiqueta."""
+    marcas = ",".join("?" * len(categorias))
+    return conn.execute(
+        f"""
+        SELECT e.id, e.gmail_id, d.category
+        FROM emails e
+        JOIN decisions d ON d.id = (SELECT MAX(id) FROM decisions WHERE email_id = e.id)
+        WHERE e.label_applied IS NULL AND d.category IN ({marcas})
+        LIMIT ?
+        """,
+        (*categorias, limite),
+    ).fetchall()
+
+
+def marcar_etiquetado(conn: sqlite3.Connection, email_id: int, etiqueta: str) -> None:
+    with conn:
+        conn.execute("UPDATE emails SET label_applied = ? WHERE id = ?", (etiqueta, email_id))
+
+
+# --- Resumen y estadisticas -----------------------------------------------------------
+
+def mails_desde(conn: sqlite3.Connection, desde: str) -> list[sqlite3.Row]:
+    """Mails recibidos desde esa fecha, con la categoria de su ultima decision."""
+    return conn.execute(
+        """
+        SELECT e.subject, e.received_at, c.email AS from_email, c.name AS from_name, d.category, d.action
+        FROM emails e
+        JOIN contacts c ON c.id = e.contact_id
+        LEFT JOIN decisions d ON d.id = (SELECT MAX(id) FROM decisions WHERE email_id = e.id)
+        WHERE e.received_at >= ?
+        ORDER BY e.received_at DESC
+        """,
+        (desde,),
+    ).fetchall()
 
 
 def top_contactos(conn: sqlite3.Connection, limite: int = 10) -> list[sqlite3.Row]:

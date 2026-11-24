@@ -88,9 +88,13 @@ class _Pedido:
 class GmailFalso:
     """Imita la parte de la API de Gmail que usa la app y anota lo que se le pidio."""
 
-    def __init__(self, cabeceras=None):
+    def __init__(self, cabeceras=None, mensajes=None, hilos=None, yo="yo@gmail.com", etiquetas=None):
         self.hechos: list = []
         self.cabeceras = cabeceras or []
+        self.mensajes = mensajes or {}   # id -> mensaje (para los enviados)
+        self.hilos = hilos or {}         # id de conversacion -> {"messages": [...]}
+        self.yo = yo
+        self.etiquetas = etiquetas or []  # [{"name", "id"}]
 
     def users(self):
         return self
@@ -100,6 +104,34 @@ class GmailFalso:
 
     def drafts(self):
         return _Borradores(self)
+
+    def getProfile(self, userId):
+        return _Pedido(self.hechos, ("perfil",), {"emailAddress": self.yo})
+
+    def list(self, userId, q, maxResults, pageToken=None):
+        ids = [{"id": i} for i in self.mensajes] if "in:sent" in q else []
+        return _Pedido(self.hechos, ("listar", q), {"messages": ids})
+
+    def threads(self):
+        gmail = self
+
+        class Hilos:
+            def get(self, userId, id, **_k):
+                return _Pedido(gmail.hechos, ("hilo", id), gmail.hilos.get(id, {"messages": []}))
+        return Hilos()
+
+    def labels(self):
+        gmail = self
+
+        class Etiquetas:
+            def list(self, userId):
+                return _Pedido(gmail.hechos, ("listar etiquetas",), {"labels": gmail.etiquetas})
+
+            def create(self, userId, body):
+                nueva = {"name": body["name"], "id": f"Label_{len(gmail.etiquetas) + 1}"}
+                gmail.etiquetas.append(nueva)
+                return _Pedido(gmail.hechos, ("crear etiqueta", body["name"]), nueva)
+        return Etiquetas()
 
     def trash(self, userId, id):
         return _Pedido(self.hechos, ("papelera", id))
@@ -112,7 +144,13 @@ class GmailFalso:
 
     def get(self, userId, id, **_k):
         return _Pedido(self.hechos, ("leer", id),
-                       {"threadId": "hilo-" + id, "payload": {"headers": self.cabeceras}})
+                       self.mensajes.get(id) or {"threadId": "hilo-" + id, "payload": {"headers": self.cabeceras}})
+
+
+def mensaje(gmail_id, de="", para="", asunto="", fecha_ms=0, hilo=None) -> dict:
+    """Mensaje con el formato de la API de Gmail (solo cabeceras)."""
+    cabeceras = [{"name": n, "value": v} for n, v in (("From", de), ("To", para), ("Subject", asunto)) if v]
+    return {"id": gmail_id, "threadId": hilo or "hilo-" + gmail_id, "internalDate": str(fecha_ms), "payload": {"headers": cabeceras}}
 
 
 class _Borradores:

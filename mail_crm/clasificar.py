@@ -95,6 +95,9 @@ def _clasificar(conn, rehacer: bool) -> dict:
             por_ia += 1
             if accion != "ninguna":  # solo lo que la IA decidio con confianza
                 por_categoria[r["categoria"]] = por_categoria.get(r["categoria"], 0) + 1
+            # Mails de una busqueda laboral concreta: se sugieren para el tablero (nunca se agregan solos).
+            if r.get("laboral") and r["categoria"] != "spam" and db.sugerir_postulacion(conn, mail["id"], r["empresa"], r["puesto"]):
+                por_categoria["postulacion_sugerida"] = por_categoria.get("postulacion_sugerida", 0) + 1
 
     print(
         f"\n{por_regla + por_ia} de {len(pendientes)} mails clasificados "

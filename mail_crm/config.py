@@ -117,6 +117,38 @@ DIAS_DE_RETENCION = int(os.environ.get("DIAS_DE_RETENCION", "60"))
 # sus registros los guarda el hosting y no hace falta que tengan datos personales.
 DETALLE_EN_CONSOLA = PANEL_HOST == "127.0.0.1"
 
+# --- Hora local (Argentina no cambia de horario en verano) ---
+HUSO_HORARIO = -3
+# A partir de esta hora, la primera actualizacion del dia arma el resumen diario.
+HORA_RESUMEN = 8
+
+# --- Seguimientos ---
+# Mails que mandaste y que vigila el panel para avisarte si no te contestan.
+GMAIL_QUERY_ENVIADOS = "in:sent newer_than:14d"
+DIAS_SIN_RESPUESTA = 3  # pasados estos dias sin respuesta, aparece en Seguimientos
+
+# --- Postulaciones ---
+ETAPAS_POSTULACION = {
+    "sugerida": "Sugerida por la IA",
+    "interesa": "Me interesa",
+    "postulado": "Me postulé",
+    "entrevista": "Entrevista",
+    "oferta": "Oferta",
+    "descartado": "Descartado",
+}
+
+# --- Etiquetas en Gmail (si las activas en Ajustes) ---
+# Cada mail clasificado por la IA recibe la etiqueta de su categoria.
+ETIQUETA_POR_CATEGORIA = {
+    "spam": "CRM/Spam",
+    "promocion": "CRM/Promociones",
+    "notificacion": "CRM/Notificaciones",
+    "atencion": "CRM/Atención",
+    "personal": "CRM/Personal",
+    "importante": "CRM/Importante",
+    "requiere_respuesta": "CRM/Para responder",
+}
+
 # --- Avisos al celular ---
 # Despues de cada actualizacion llega un aviso si aparecieron mails de estas categorias.
 CATEGORIAS_CON_AVISO = {"requiere_respuesta": "para responder", "atencion": "que tenés que ver"}

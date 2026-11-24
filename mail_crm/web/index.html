@@ -117,6 +117,32 @@
   .historial { max-height: 260px; overflow-y: auto; margin-top: 8px; border-top: 1px solid var(--borde); }
   .historial div { padding: 8px 0; border-bottom: 1px solid var(--borde); }
   .subtitulo { margin: 16px 0 0; font-size: 13px; font-weight: 600; }
+  nav { overflow-x: auto; scrollbar-width: none; }
+  nav button { white-space: nowrap; }
+  #resumen-texto { white-space: pre-line; }
+  .tablero { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 10px; overflow-x: auto; padding-bottom: 8px; }
+  .columna { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; padding: 10px; min-height: 120px; }
+  .columna h3 { margin: 0 0 8px; font-size: 13px; color: var(--suave); text-transform: uppercase; letter-spacing: 0.04em; }
+  .postulacion { border: 1px solid var(--borde); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--fondo); }
+  .postulacion b { display: block; overflow-wrap: anywhere; }
+  .postulacion select { width: 100%; margin-top: 6px; font-size: 13px; padding: 4px 6px; }
+  .postulacion .botones { margin-top: 6px; }
+  .sugerencia { display: flex; gap: 10px; align-items: center; justify-content: space-between; flex-wrap: wrap; }
+  .graficos { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 12px; }
+  .barras { display: grid; grid-template-columns: minmax(90px, max-content) 1fr; gap: 6px 10px; align-items: center; margin-top: 10px; }
+  .barras .nombre { font-size: 13px; color: var(--suave); overflow-wrap: anywhere; }
+  .barra { display: flex; align-items: center; gap: 6px; font-size: 13px; font-variant-numeric: tabular-nums; }
+  .barra span:first-child { height: 12px; min-width: 2px; background: var(--acento); border-radius: 0 4px 4px 0; }
+  .semanas { display: flex; align-items: flex-end; gap: 2px; height: 140px; margin-top: 14px; border-bottom: 1px solid var(--borde); }
+  .semana { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; align-items: center; height: 100%; }
+  .semana span { width: min(28px, 70%); background: var(--acento); border-radius: 4px 4px 0 0; min-height: 2px; }
+  .semana:hover span { opacity: 0.8; }
+  .ejes { display: flex; gap: 2px; font-size: 11px; color: var(--suave); margin-top: 4px; }
+  .ejes span { flex: 1; text-align: center; }
+  @media (max-width: 640px) {
+    nav button { flex: 0 0 auto; }
+    .tablero { grid-auto-flow: row; grid-auto-columns: auto; }
+  }
 </style>
 </head>
 <body>
@@ -133,17 +159,53 @@
 
   <nav role="tablist">
     <button role="tab" data-vista="mails" aria-selected="true">Mails</button>
+    <button role="tab" data-vista="postulaciones" aria-selected="false" id="tab-postulaciones">Postulaciones</button>
+    <button role="tab" data-vista="seguimientos" aria-selected="false" id="tab-seguimientos">Seguimientos</button>
     <button role="tab" data-vista="contactos" aria-selected="false">Contactos</button>
-    <button role="tab" data-vista="reglas" aria-selected="false">Reglas</button>
+    <button role="tab" data-vista="reglas" aria-selected="false" id="tab-reglas">Reglas</button>
+    <button role="tab" data-vista="estadisticas" aria-selected="false">Estadísticas</button>
     <button role="tab" data-vista="ajustes" aria-selected="false">Ajustes</button>
   </nav>
 
   <section id="vista-mails">
+    <div class="tarjeta resumen-dia" id="resumen-dia" hidden>
+      <h3 id="resumen-titulo">Resumen de hoy</h3>
+      <div id="resumen-texto"></div>
+      <div class="botones"><button class="btn" id="resumen-generar">Actualizar resumen</button></div>
+    </div>
     <input class="buscar" id="buscar-mails" type="search" placeholder="Buscar por remitente o asunto" aria-label="Buscar mails">
     <div class="tabla"><table>
       <thead><tr><th>Fecha</th><th>Remitente y asunto</th><th>Acción</th><th>Motivo</th><th></th></tr></thead>
       <tbody id="filas-mails"></tbody>
     </table></div>
+  </section>
+
+  <section id="vista-postulaciones" hidden>
+    <form class="regla" id="form-postulacion">
+      <input name="company" required maxlength="100" placeholder="Empresa o cliente" aria-label="Empresa">
+      <input name="role" maxlength="120" placeholder="Puesto o proyecto (opcional)" aria-label="Puesto">
+      <button class="btn principal">Agregar al tablero</button>
+    </form>
+    <div class="chico nota-deshacer" id="postulaciones-ayuda">La IA sugiere los mails de búsquedas laborales concretas; vos decidís si van al tablero.</div>
+    <div class="tablero" id="tablero"></div>
+  </section>
+
+  <section id="vista-seguimientos" hidden>
+    <div class="chico" id="seguimientos-ayuda"></div>
+    <div class="tabla nota-deshacer"><table>
+      <thead><tr><th>Enviado</th><th>Para</th><th>Asunto</th><th></th></tr></thead>
+      <tbody id="filas-seguimientos"></tbody>
+    </table></div>
+  </section>
+
+  <section id="vista-estadisticas" hidden>
+    <div class="graficos">
+      <div class="tarjeta"><h3>Mails recibidos por semana</h3><div class="chico" id="est-total"></div>
+        <div class="semanas" id="est-semanas" role="img"></div><div class="ejes" id="est-ejes"></div></div>
+      <div class="tarjeta"><h3>Qué decidió el panel</h3><div class="barras" id="est-categorias"></div></div>
+      <div class="tarjeta"><h3>Quién te escribe más</h3><div class="barras" id="est-remitentes"></div></div>
+      <div class="tarjeta"><h3>Postulaciones por etapa</h3><div class="barras" id="est-postulaciones"></div></div>
+    </div>
   </section>
 
   <section id="vista-contactos" hidden>
@@ -155,6 +217,7 @@
   </section>
 
   <section id="vista-reglas" hidden>
+    <div id="sugerencias"></div>
     <form class="regla" id="form-regla">
       <input name="pattern" required placeholder="Mail o dominio (tienda.com)" aria-label="Mail o dominio">
       <select name="action" aria-label="Acción"></select>
@@ -177,6 +240,14 @@
       </label>
     </div>
     <div class="tarjeta">
+      <label class="interruptor">
+        <input type="checkbox" id="ajuste-etiquetas">
+        <span><b>Etiquetar en Gmail</b>
+          <span class="chico">Cada mail que clasifica la IA recibe en Gmail una etiqueta con su categoría
+          (por ejemplo "CRM/Para responder"). No mueve ni borra nada; las etiquetas se pueden quitar desde Gmail.</span></span>
+      </label>
+    </div>
+    <div class="tarjeta">
       <h3>Avisos en este dispositivo</h3>
       <div class="chico" id="avisos-estado">Revisando…</div>
       <div class="chico nota-deshacer">El aviso dice cuántos mails tenés para responder o para ver, nunca quién te escribió ni el asunto.</div>
@@ -193,6 +264,31 @@
   </section>
 </main>
 
+<dialog id="opciones">
+  <h2 id="opciones-titulo"></h2>
+  <div class="chico" id="opciones-asunto"></div>
+  <label>Qué hacer con este mail
+    <select id="opciones-accion"></select>
+  </label>
+  <div class="chico nota-deshacer">Si lo corregís varias veces con el mismo remitente, el panel te va a sugerir una regla.</div>
+  <div class="pie">
+    <button class="btn" id="opciones-tablero">Agregar a postulaciones</button>
+    <button class="btn" id="opciones-cerrar">Cerrar</button>
+    <button class="btn principal" id="opciones-guardar">Guardar</button>
+  </div>
+</dialog>
+<dialog id="postulacion">
+  <h2>Postulación</h2>
+  <label>Empresa o cliente <input id="post-company" maxlength="100"></label>
+  <label>Puesto o proyecto <input id="post-role" maxlength="120"></label>
+  <label>Notas <textarea id="post-notes" maxlength="2000" placeholder="Ej.: entrevista técnica el jueves 10 h, pidieron portfolio"></textarea></label>
+  <div class="chico nota-deshacer" id="post-origen"></div>
+  <div class="pie">
+    <button class="btn" id="post-borrar">Borrar</button>
+    <button class="btn" id="post-cerrar">Cerrar</button>
+    <button class="btn principal" id="post-guardar">Guardar</button>
+  </div>
+</dialog>
 <dialog id="contacto" class="ancho">
   <h2 id="contacto-nombre"></h2>
   <div class="chico" id="contacto-email"></div>
@@ -289,11 +385,16 @@ async function api(url, opciones) {
 }
 
 async function cargar() {
-  const [m, c, r] = await Promise.all([api("/api/mails"), api("/api/contactos"), api("/api/reglas")]);
-  Object.assign(estado, { mails: m.mails, contactos: c.contactos, reglas: r.reglas, acciones: r.acciones, conEfecto: m.con_efecto });
+  const [m, c, r, p, s, g, rd] = await Promise.all([api("/api/mails"), api("/api/contactos"), api("/api/reglas"),
+    api("/api/postulaciones"), api("/api/seguimientos"), api("/api/sugerencias"), api("/api/resumen")]);
+  Object.assign(estado, { mails: m.mails, contactos: c.contactos, reglas: r.reglas, acciones: r.acciones, conEfecto: m.con_efecto,
+                          postulaciones: p.postulaciones, etapas: p.etapas, seguimientos: s.seguimientos, diasSeguimiento: s.dias,
+                          sugerencias: g.sugerencias });
   pintarResumen(m.por_accion); pintarMails(); pintarContactos(); pintarReglas(); pintarBotonAplicar();
+  pintarResumenDia(rd.resumen); pintarTablero(); pintarSeguimientos(); pintarSugerencias();
   $("btn-salir").hidden = !m.login_activo;
 }
+const contarEnTab = (id, nombre, n) => { $(id).textContent = n ? `${nombre} (${n})` : nombre; };
 $("btn-actualizar").addEventListener("click", async () => {
   const b = $("btn-actualizar"); b.disabled = true; b.textContent = "Revisando Gmail…";
   try {
@@ -386,7 +487,8 @@ function pintarMails() {
           : "",
         m.applied
           ? el("button", { class: "btn", onclick: () => deshacer(m.decision_id) }, "Deshacer")
-          : el("button", { class: "btn", onclick: () => abrirDialogo(m.from_email) }, "Crear regla")))));
+          : el("button", { class: "btn", onclick: () => abrirDialogo(m.from_email) }, "Crear regla"),
+        el("button", { class: "btn", onclick: () => abrirOpciones(m), "aria-label": "Más opciones" }, "Más")))));
   }
 }
 
@@ -503,18 +605,194 @@ async function cargarAjustes() {
   try {
     const a = await api("/api/ajustes");
     $("ajuste-reglas").checked = a.reglas_automaticas;
+    $("ajuste-etiquetas").checked = a.etiquetas_gmail;
     $("ajuste-retencion").textContent = `Los mails se borran de la base del panel a los ${a.dias_de_retencion} días ` +
       "(en Gmail no se borra nada). Los contactos, tus notas y tus reglas se conservan siempre.";
   } catch (e) { avisar(e.message); }
   estadoAvisos();
 }
-$("ajuste-reglas").addEventListener("change", async (ev) => {
-  try {
-    await api("/api/ajustes", { method: "POST", headers: { "Content-Type": "application/json" },
-                                body: JSON.stringify({ reglas_automaticas: ev.target.checked }) });
-    avisar(ev.target.checked ? "Tus reglas se van a aplicar solas en cada actualización." : "Tus reglas vuelven a esperar el botón.");
-  } catch (e) { ev.target.checked = !ev.target.checked; avisar(e.message); }
+const TEXTOS_AJUSTE = {
+  reglas_automaticas: ["Tus reglas se van a aplicar solas en cada actualización.", "Tus reglas vuelven a esperar el botón."],
+  etiquetas_gmail: ["Los mails se van a etiquetar en Gmail en la próxima actualización.", "No se ponen más etiquetas (las que ya están quedan)."],
+};
+for (const [id, nombre] of [["ajuste-reglas", "reglas_automaticas"], ["ajuste-etiquetas", "etiquetas_gmail"]]) {
+  $(id).addEventListener("change", async (ev) => {
+    try {
+      await api("/api/ajustes", { method: "POST", headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ [nombre]: ev.target.checked }) });
+      avisar(TEXTOS_AJUSTE[nombre][ev.target.checked ? 0 : 1]);
+    } catch (e) { ev.target.checked = !ev.target.checked; avisar(e.message); }
+  });
+}
+
+// --- Resumen del dia ---
+function pintarResumenDia(r) {
+  $("resumen-dia").hidden = !r;
+  if (!r) return;
+  const hoy = new Date().toLocaleDateString("en-CA");  // AAAA-MM-DD en hora local
+  $("resumen-titulo").textContent = r.fecha === hoy ? "Resumen de hoy" : `Resumen del ${fecha(r.fecha + "T12:00:00")}`;
+  $("resumen-texto").textContent = r.texto;
+}
+$("resumen-generar").addEventListener("click", async () => {
+  const b = $("resumen-generar"); b.disabled = true; b.textContent = "Armando el resumen…";
+  try { pintarResumenDia((await api("/api/resumen/generar", { method: "POST" })).resumen); }
+  catch (e) { avisar(e.message); }
+  b.disabled = false; b.textContent = "Actualizar resumen";
 });
+
+// --- Opciones de un mail: cambiar la accion a mano o llevarlo al tablero ---
+let enOpciones = null;
+function abrirOpciones(m) {
+  enOpciones = m;
+  $("opciones-titulo").textContent = m.from_name || m.from_email;
+  $("opciones-asunto").textContent = m.subject || "(sin asunto)";
+  $("opciones-accion").replaceChildren(...estado.acciones.map((a) => el("option", { value: a }, NOMBRES[a])));
+  if (estado.acciones.includes(m.action)) $("opciones-accion").value = m.action;
+  $("opciones-guardar").disabled = Boolean(m.applied);
+  $("opciones").showModal();
+}
+$("opciones-cerrar").addEventListener("click", () => $("opciones").close());
+$("opciones-guardar").addEventListener("click", async () => {
+  try {
+    await api("/api/decisiones/cambiar", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email_id: enOpciones.email_id, action: $("opciones-accion").value }) });
+    $("opciones").close(); await cargar(); avisar("Acción cambiada. Todavía no se aplicó en Gmail.");
+  } catch (e) { avisar(e.message); }
+});
+$("opciones-tablero").addEventListener("click", async () => {
+  const m = enOpciones, empresa = (m.from_name || m.from_email.split("@").pop()).slice(0, 100);
+  try {
+    await api("/api/postulaciones", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company: empresa, role: (m.subject || "").slice(0, 120), email_id: m.email_id }) });
+    $("opciones").close(); await cargar(); avisar("Agregado al tablero de postulaciones. Podés corregir la empresa y el puesto ahí.");
+  } catch (e) { avisar(e.message); }
+});
+
+// --- Tablero de postulaciones ---
+async function cambiarPostulacion(id, cambios, mensaje) {
+  try {
+    await api("/api/postulaciones/" + id, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(cambios) });
+    await cargar(); if (mensaje) avisar(mensaje);
+  } catch (e) { avisar(e.message); }
+}
+async function borrarPostulacion(id, mensaje) {
+  try { await api("/api/postulaciones/" + id, { method: "DELETE" }); await cargar(); avisar(mensaje); }
+  catch (e) { avisar(e.message); }
+}
+function tarjetaPostulacion(p) {
+  const sugerida = p.stage === "sugerida";
+  const etapas = Object.entries(estado.etapas).filter(([k]) => k !== "sugerida");
+  return el("div", { class: "postulacion" },
+    el("b", {}, p.company), p.role ? el("div", {}, p.role) : "",
+    p.contact_email ? el("div", { class: "chico" }, p.contact_email) : "",
+    p.notes ? el("div", { class: "chico" }, p.notes.length > 90 ? p.notes.slice(0, 90) + "…" : p.notes) : "",
+    sugerida
+      ? el("div", { class: "botones" },
+          el("button", { class: "btn principal", onclick: () => cambiarPostulacion(p.id, { stage: "interesa" }, "Agregada a \"Me interesa\".") }, "Agregar"),
+          el("button", { class: "btn", onclick: () => borrarPostulacion(p.id, "Sugerencia descartada.") }, "Descartar"))
+      : el("div", {},
+          (() => { const s = el("select", { "aria-label": `Etapa de ${p.company}` }, ...etapas.map(([k, v]) => el("option", { value: k }, v)));
+                   s.value = p.stage; s.onchange = () => cambiarPostulacion(p.id, { stage: s.value }); return s; })(),
+          el("div", { class: "botones" }, el("button", { class: "btn", onclick: () => abrirPostulacion(p) }, "Editar y notas"))));
+}
+function pintarTablero() {
+  const tablero = $("tablero"); tablero.replaceChildren();
+  const sugeridas = estado.postulaciones.filter((p) => p.stage === "sugerida").length;
+  contarEnTab("tab-postulaciones", "Postulaciones", sugeridas);
+  for (const [etapa, nombre] of Object.entries(estado.etapas)) {
+    const lista = estado.postulaciones.filter((p) => p.stage === etapa);
+    if (etapa === "sugerida" && !lista.length) continue;
+    tablero.append(el("div", { class: "columna" }, el("h3", {}, `${nombre} · ${lista.length}`),
+      ...(lista.length ? lista.map(tarjetaPostulacion) : [el("div", { class: "chico" }, "Vacío")])));
+  }
+}
+let enPostulacion = null;
+function abrirPostulacion(p) {
+  enPostulacion = p;
+  $("post-company").value = p.company; $("post-role").value = p.role || ""; $("post-notes").value = p.notes || "";
+  $("post-origen").textContent = p.subject ? `Desde el mail: ${p.subject}` : "";
+  $("postulacion").showModal();
+}
+$("post-cerrar").addEventListener("click", () => $("postulacion").close());
+$("post-guardar").addEventListener("click", async () => {
+  const company = $("post-company").value.trim();
+  if (!company) { avisar("Poné el nombre de la empresa o cliente."); return; }
+  $("postulacion").close();
+  await cambiarPostulacion(enPostulacion.id, { company, role: $("post-role").value, notes: $("post-notes").value }, "Postulación guardada.");
+});
+$("post-borrar").addEventListener("click", async () => { $("postulacion").close(); await borrarPostulacion(enPostulacion.id, "Postulación borrada."); });
+$("form-postulacion").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const f = ev.target;
+  try {
+    await api("/api/postulaciones", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ company: f.company.value.trim(), role: f.role.value.trim() }) });
+    f.reset(); await cargar(); avisar("Agregada a \"Me interesa\".");
+  } catch (e) { avisar(e.message); }
+});
+
+// --- Seguimientos: mails tuyos sin respuesta ---
+const diasDesde = (iso) => Math.floor((Date.now() - new Date(iso)) / 86400000);
+function pintarSeguimientos() {
+  contarEnTab("tab-seguimientos", "Seguimientos", estado.seguimientos.length);
+  $("seguimientos-ayuda").textContent = `Mails que mandaste hace más de ${estado.diasSeguimiento} días y que todavía nadie contestó.`;
+  const tbody = $("filas-seguimientos"); tbody.replaceChildren();
+  if (!estado.seguimientos.length) { tbody.append(el("tr", {}, el("td", { colspan: "4", class: "vacio" }, "Nada pendiente: te contestaron todo."))); return; }
+  for (const s of estado.seguimientos) {
+    tbody.append(el("tr", {},
+      el("td", { class: "num chico" }, `${fecha(s.sent_at)} · hace ${diasDesde(s.sent_at)} días`),
+      el("td", {}, el("div", { class: "remitente" }, s.to_name || s.to_email), el("div", { class: "chico" }, s.to_email)),
+      el("td", {}, s.subject || "(sin asunto)"),
+      el("td", {}, el("button", { class: "btn", onclick: () => descartarSeguimiento(s.id) }, "No espero respuesta"))));
+  }
+}
+async function descartarSeguimiento(id) {
+  try { await api(`/api/seguimientos/${id}/descartar`, { method: "POST" }); await cargar(); avisar("Listo, ya no aparece."); }
+  catch (e) { avisar(e.message); }
+}
+
+// --- Sugerencias de reglas ---
+function pintarSugerencias() {
+  contarEnTab("tab-reglas", "Reglas", estado.sugerencias.length);
+  $("sugerencias").replaceChildren(...estado.sugerencias.map((s) => el("div", { class: "tarjeta sugerencia" },
+    el("div", {}, el("b", {}, `Sugerencia: ${NOMBRES[s.action]} siempre para ${s.pattern}`), el("div", { class: "chico" }, s.motivo)),
+    el("div", { class: "botones" },
+      el("button", { class: "btn principal", onclick: () => guardarRegla(s.pattern, s.action, "Sugerida por el panel") }, "Crear regla"),
+      el("button", { class: "btn", onclick: () => ignorarSugerencia(s.pattern) }, "Ignorar")))));
+}
+async function ignorarSugerencia(pattern) {
+  try {
+    await api("/api/sugerencias/ignorar", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pattern }) });
+    await cargar(); avisar("No te la vuelvo a sugerir.");
+  } catch (e) { avisar(e.message); }
+}
+
+// --- Estadisticas: barras de un solo color, con el nombre y el numero escritos ---
+const NOMBRES_CATEGORIA = { spam: "Spam", promocion: "Promoción", notificacion: "Notificación", atencion: "Atención",
+  personal: "Personal", importante: "Importante", requiere_respuesta: "Para responder", regla: "Por tus reglas",
+  manual: "Elegido por vos", pendiente: "Sin clasificar" };
+function barras(id, filas) {
+  const max = Math.max(1, ...filas.map((f) => f.valor));
+  $(id).replaceChildren(...(filas.length ? filas.flatMap((f) => [
+    el("div", { class: "nombre", title: f.nombre }, f.nombre),
+    el("div", { class: "barra", title: `${f.nombre}: ${f.valor}` }, el("span", { style: `width: ${(f.valor / max) * 85}%` }), el("span", {}, String(f.valor)))])
+    : [el("div", { class: "chico" }, "Todavía no hay datos.")]));
+}
+async function cargarEstadisticas() {
+  let d;
+  try { d = await api("/api/estadisticas"); } catch (e) { avisar(e.message); return; }
+  $("est-total").textContent = `${d.total} mails en las últimas 8 semanas (la base guarda ${d.dias_de_retencion} días).`;
+  const max = Math.max(1, ...d.semanas.map((s) => s.mails));
+  $("est-semanas").setAttribute("aria-label", d.semanas.map((s) => `semana del ${fecha(s.desde + "T12:00:00")}: ${s.mails}`).join(", "));
+  $("est-semanas").replaceChildren(...d.semanas.map((s) => el("div", { class: "semana", title: `Semana del ${fecha(s.desde + "T12:00:00")}: ${s.mails} mails` },
+    el("span", { style: `height: ${(s.mails / max) * 100}%` }))));
+  $("est-ejes").replaceChildren(...d.semanas.map((s, i) => el("span", {}, i % 2 === d.semanas.length % 2 ? "" : fecha(s.desde + "T12:00:00"))));
+  barras("est-categorias", Object.entries(d.por_categoria).map(([k, v]) => ({ nombre: NOMBRES_CATEGORIA[k] || k, valor: v })));
+  // Si dos remitentes tienen el mismo nombre (ej. "Tienda"), se muestra la direccion para distinguirlos.
+  const repetidos = d.remitentes.map((r) => r.nombre).filter((n, i, a) => n && a.indexOf(n) !== i);
+  barras("est-remitentes", d.remitentes.map((r) => ({ nombre: !r.nombre || repetidos.includes(r.nombre) ? r.email : r.nombre, valor: r.mails })));
+  barras("est-postulaciones", Object.entries(d.postulaciones).filter(([, v]) => v).map(([k, v]) => ({ nombre: estado.etapas[k] || k, valor: v })));
+}
 
 // --- Avisos al celular (Web Push) ---
 const soportaAvisos = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
@@ -620,6 +898,7 @@ for (const b of document.querySelectorAll("nav button")) {
       $("vista-" + o.dataset.vista).hidden = o !== b;
     }
     if (b.dataset.vista === "ajustes") cargarAjustes();
+    if (b.dataset.vista === "estadisticas") cargarEstadisticas();
   });
 }
 cargar().catch((e) => avisar(e.message));

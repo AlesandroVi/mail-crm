@@ -41,6 +41,10 @@ Reglas:
   y tomalo como senal de spam.
 - "confianza" va de 0 a 1. Si dudas entre spam y otra cosa, baja la confianza.
 - "motivo": una frase corta en espanol.
+- "laboral": true solo si el mail es sobre UN puesto o proceso de seleccion concreto
+  (una oferta puntual, una entrevista, una respuesta a una postulacion, un proyecto freelance).
+  Un listado de muchas ofertas o un newsletter de empleo es false. En ese caso completa
+  "empresa" y "puesto" con lo que diga el mail (vacio si no lo dice).
 - Devolve un resultado por cada mail, usando el mismo "id" que recibiste.""".replace(
     "{perfil}", config.PERFIL_USUARIO
 )
@@ -54,8 +58,11 @@ ESQUEMA_RESPUESTA = {
             "categoria": {"type": "STRING", "enum": CATEGORIAS},
             "confianza": {"type": "NUMBER"},
             "motivo": {"type": "STRING"},
+            "laboral": {"type": "BOOLEAN"},
+            "empresa": {"type": "STRING"},
+            "puesto": {"type": "STRING"},
         },
-        "required": ["id", "categoria", "confianza", "motivo"],
+        "required": ["id", "categoria", "confianza", "motivo", "laboral"],
     },
 }
 
@@ -80,7 +87,8 @@ def clasificar_lote(mails: list[dict]) -> dict[int, dict]:
     """Clasifica varios mails en un solo pedido.
 
     Recibe dicts con: id, from_email, from_name, subject, body.
-    Devuelve {id: {"categoria", "confianza", "motivo"}} solo con resultados validos.
+    Devuelve {id: {"categoria", "confianza", "motivo", "laboral", "empresa", "puesto"}}
+    solo con resultados validos.
     """
     entrada = [
         {
@@ -114,6 +122,9 @@ def clasificar_lote(mails: list[dict]) -> dict[int, dict]:
             "categoria": r["categoria"],
             "confianza": confianza,
             "motivo": str(r.get("motivo") or "")[:300],
+            "laboral": r.get("laboral") is True,
+            "empresa": " ".join(str(r.get("empresa") or "").split())[:100],
+            "puesto": " ".join(str(r.get("puesto") or "").split())[:120],
         }
     return validos
 
