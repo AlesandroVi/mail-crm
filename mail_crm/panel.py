@@ -9,10 +9,13 @@ En un servidor de internet (PANEL_HOST=0.0.0.0) la contraseña es obligatoria.
 import base64
 import hashlib
 import hmac
+import json
 import re
 import secrets
 import threading
 from collections import Counter
+from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -21,7 +24,7 @@ from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
 from googleapiclient.errors import HttpError
 from pydantic import BaseModel, Field
 
-from . import acciones, auth, clasificador, clasificar, config, db, gmail_client, redactor, sync
+from . import acciones, auth, avisos, clasificador, clasificar, config, db, gmail_client, redactor, sync
 from .reglas import ACCIONES_DE_REGLA
 
 WEB = Path(__file__).parent / "web"
@@ -30,15 +33,42 @@ PATRON_VALIDO = re.compile(r"^([a-z0-9._%+-]+@)?[a-z0-9-]+(\.[a-z0-9-]+)+$")
 COOKIE = "sesion"
 COOKIE_DISPOSITIVO = "dispositivo"
 # Lo unico que se puede ver sin iniciar sesion.
-RUTAS_PUBLICAS = {"/login", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/salud",
+RUTAS_PUBLICAS = {"/login", "/manifest.webmanifest", "/icon-192.png", "/icon-512.png", "/salud", "/sw.js",
                   "/api/tarea/actualizar"}  # esta ultima se protege con su propio token
-
-app = FastAPI(title="Mail CRM", docs_url=None, redoc_url=None, openapi_url=None)
-intentos = auth.LimiteDeIntentos()
+# Ningun pedido legitimo del panel pesa mas que esto (el mas grande es un borrador de 10.000 caracteres).
+MAX_PEDIDO = 256 * 1024
+# Sin contraseña, el panel solo atiende pedidos hechos desde esta misma PC.
+DIRECCIONES_LOCALES = {"127.0.0.1", "::1"}
+NOMBRES_LOCALES = {"127.0.0.1", "localhost", "[::1]"}
 
 
 def login_activo() -> bool:
     return bool(config.PANEL_CLAVE_HASH and config.PANEL_SECRETO)
+
+
+@asynccontextmanager
+async def _al_arrancar(_app):
+    # Esta comprobacion corre siempre, se arranque como se arranque (python -m o uvicorn).
+    if config.PANEL_HOST not in DIRECCIONES_LOCALES and not login_activo():
+        raise RuntimeError(
+            "No arranco: el panel quedaria abierto a internet sin contraseña. "
+            "Defini una con: python -m mail_crm.clave"
+        )
+    yield
+
+
+app = FastAPI(title="Mail CRM", docs_url=None, redoc_url=None, openapi_url=None, lifespan=_al_arrancar)
+intentos = auth.LimiteDeIntentos()
+_un_login_a_la_vez = threading.Lock()  # cada login usa ~32 MB de memoria (scrypt)
+
+
+def _registrar(evento: str, request: Request | None = None) -> None:
+    """Deja una linea en el registro del servidor. Nunca incluye contraseñas ni contenido de mails."""
+    origen = ""
+    if request is not None:
+        cliente = request.client.host if request.client else "?"
+        origen = f" desde={request.headers.get('x-forwarded-for', cliente)[:100]}"
+    print(f"[seguridad] {datetime.now(timezone.utc):%Y-%m-%d %H:%M:%S} {evento}{origen}", flush=True)
 
 
 def _es_https(request: Request) -> bool:
@@ -83,7 +113,7 @@ def _politica_de_contenido() -> str:
         "default-src 'none'; "
         f"script-src {' '.join(sorted(huellas['script']))}; "
         f"style-src {' '.join(sorted(huellas['style']))}; "
-        "img-src 'self'; connect-src 'self'; manifest-src 'self'; "
+        "img-src 'self'; connect-src 'self'; manifest-src 'self'; worker-src 'self'; "
         "base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
     )
 
@@ -93,13 +123,27 @@ CSP = _politica_de_contenido()
 
 def _rechazo(request: Request):
     """Devuelve la respuesta de rechazo si el pedido no puede pasar, o None si puede."""
-    # 1) Rechaza cambios pedidos desde otra pagina web abierta en tu navegador.
+    # 0) Sin contraseña, solo se atiende a esta PC. Revisar tambien el nombre (Host) frena a
+    #    una pagina web que intente hacerse pasar por 127.0.0.1 ("DNS rebinding").
+    if not login_activo():
+        cliente = request.client.host if request.client else ""
+        nombre = (request.headers.get("host") or "").rsplit(":", 1)[0].lower()
+        if cliente not in DIRECCIONES_LOCALES or nombre not in NOMBRES_LOCALES:
+            return JSONResponse({"detail": "Sin contraseña, este panel solo se puede usar desde esta PC."},
+                                status_code=403)
+
+    # 1) Pedidos exageradamente grandes: se cortan antes de leerlos.
+    largo = request.headers.get("content-length", "0")
+    if not largo.isdigit() or int(largo) > MAX_PEDIDO:
+        return JSONResponse({"detail": "El pedido es demasiado grande."}, status_code=413)
+
+    # 2) Rechaza cambios pedidos desde otra pagina web abierta en tu navegador.
     if request.method not in ("GET", "HEAD"):
         origen = request.headers.get("origin")
         if origen and urlparse(origen).netloc != request.headers.get("host"):
             return JSONResponse({"detail": "Origen no permitido"}, status_code=403)
 
-    # 2) Si hay contraseña definida, todo lo demas exige una sesion valida.
+    # 3) Si hay contraseña definida, todo lo demas exige una sesion valida.
     ruta = request.url.path
     if login_activo() and ruta not in RUTAS_PUBLICAS and not _sesion_ok(request):
         if ruta.startswith("/api/"):
@@ -134,7 +178,7 @@ def pagina_login(request: Request):
 
 
 class Login(BaseModel):
-    clave: str
+    clave: str = Field(max_length=200)
 
 
 @app.post("/login")
@@ -143,11 +187,17 @@ def iniciar_sesion(datos: Login, request: Request):
         raise HTTPException(404, "Este panel no usa contraseña.")
     # Un navegador que ya entro bien alguna vez tiene su propia cuenta de intentos.
     dispositivo = auth.dispositivo_valido(config.PANEL_SECRETO, request.cookies.get(COOKIE_DISPOSITIVO))
+    tipo = "dispositivo conocido" if dispositivo else "dispositivo nuevo"
     if intentos.bloqueado(dispositivo):
+        _registrar(f"login bloqueado ({tipo})", request)
         raise HTTPException(429, "Demasiados intentos fallidos. Esperá 15 minutos y probá de nuevo.")
-    if not auth.verificar_clave(datos.clave, config.PANEL_CLAVE_HASH):
+    with _un_login_a_la_vez:
+        correcta = auth.verificar_clave(datos.clave, config.PANEL_CLAVE_HASH)
+    if not correcta:
         intentos.registrar_fallo(dispositivo)
+        _registrar(f"login fallido ({tipo})", request)
         raise HTTPException(401, "Contraseña incorrecta.")
+    _registrar(f"login correcto ({tipo})", request)
     respuesta = JSONResponse({"ok": True})
     opciones = {"httponly": True, "samesite": "lax", "secure": _es_https(request)}  # httponly: el JavaScript no puede leerla
     respuesta.set_cookie(
@@ -161,9 +211,10 @@ def iniciar_sesion(datos: Login, request: Request):
 
 
 @app.post("/logout")
-def cerrar_sesion():
+def cerrar_sesion(request: Request):
     """Cierra la sesion en TODOS los dispositivos: cambia la version y las cookies viejas dejan de valer."""
     global _version
+    _registrar("cierre de sesion en todos los dispositivos", request)
     nueva = secrets.token_hex(8)
     conn = db.conectar()
     try:
@@ -180,6 +231,12 @@ def cerrar_sesion():
 @app.get("/manifest.webmanifest")
 def manifiesto():
     return FileResponse(WEB / "manifest.webmanifest", media_type="application/manifest+json")
+
+
+@app.get("/sw.js")
+def service_worker():
+    """El programita que recibe los avisos en el celular. No tiene datos tuyos."""
+    return FileResponse(WEB / "sw.js", media_type="text/javascript", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/icon-{tam}.png")
@@ -202,7 +259,126 @@ def api_mails():
         "por_accion": por_accion,
         "con_efecto": acciones.ACCIONES_CON_EFECTO,
         "login_activo": login_activo(),
+        "dias_de_retencion": config.DIAS_DE_RETENCION,
     }
+
+
+# --- Ficha de contacto: historial de mails y notas tuyas ------------------------
+
+class Notas(BaseModel):
+    notas: str = Field("", max_length=2000)
+
+
+@app.get("/api/contactos/{contacto_id}")
+def api_contacto(contacto_id: int):
+    conn = db.conectar()
+    try:
+        contacto = db.contacto_por_id(conn, contacto_id)
+        if contacto is None:
+            raise HTTPException(404, "No existe ese contacto.")
+        regla = db.buscar_regla(db.listar_reglas(conn), contacto["email"])
+        mails = [dict(m) for m in db.mails_de_contacto(conn, contacto_id)]
+    finally:
+        conn.close()
+    return {"contacto": dict(contacto), "regla": dict(regla) if regla else None, "mails": mails,
+            "dias_de_retencion": config.DIAS_DE_RETENCION}
+
+
+@app.post("/api/contactos/{contacto_id}/notas")
+def api_guardar_notas(contacto_id: int, pedido: Notas):
+    conn = db.conectar()
+    try:
+        if not db.guardar_notas(conn, contacto_id, pedido.notas.strip()):
+            raise HTTPException(404, "No existe ese contacto.")
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+# --- Ajustes ---------------------------------------------------------------------
+
+class Ajustes(BaseModel):
+    reglas_automaticas: bool
+
+
+def _reglas_automaticas(conn) -> bool:
+    return db.leer_ajuste(conn, "reglas_automaticas", "1") == "1"
+
+
+@app.get("/api/ajustes")
+def api_ajustes():
+    conn = db.conectar()
+    try:
+        return {"reglas_automaticas": _reglas_automaticas(conn), "dias_de_retencion": config.DIAS_DE_RETENCION}
+    finally:
+        conn.close()
+
+
+@app.post("/api/ajustes")
+def api_guardar_ajustes(pedido: Ajustes, request: Request):
+    conn = db.conectar()
+    try:
+        db.guardar_ajuste(conn, "reglas_automaticas", "1" if pedido.reglas_automaticas else "0")
+    finally:
+        conn.close()
+    _registrar(f"reglas automaticas {'activadas' if pedido.reglas_automaticas else 'desactivadas'}", request)
+    return {"ok": True}
+
+
+# --- Avisos al celular -------------------------------------------------------------
+
+class Suscripcion(BaseModel):
+    endpoint: str = Field(max_length=avisos.LARGO_MAXIMO)
+    keys: dict[str, str]
+
+
+class Desuscripcion(BaseModel):
+    endpoint: str = Field(max_length=avisos.LARGO_MAXIMO)
+
+
+@app.get("/api/avisos/clave")
+def api_clave_avisos():
+    conn = db.conectar()
+    try:
+        return {"clave": avisos.clave_publica(conn), "dispositivos": len(db.listar_suscripciones(conn))}
+    finally:
+        conn.close()
+
+
+@app.post("/api/avisos/suscribir")
+def api_suscribir(pedido: Suscripcion, request: Request):
+    limpia = avisos.suscripcion_valida(pedido.model_dump())
+    if limpia is None:
+        raise HTTPException(422, "Este navegador usa un servicio de avisos que el panel no reconoce.")
+    conn = db.conectar()
+    try:
+        db.guardar_suscripcion(conn, limpia["endpoint"], json.dumps(limpia))
+    finally:
+        conn.close()
+    _registrar("avisos activados en un dispositivo", request)
+    return {"ok": True}
+
+
+@app.post("/api/avisos/desuscribir")
+def api_desuscribir(pedido: Desuscripcion):
+    conn = db.conectar()
+    try:
+        db.borrar_suscripcion(conn, pedido.endpoint)
+    finally:
+        conn.close()
+    return {"ok": True}
+
+
+@app.post("/api/avisos/probar")
+def api_probar_avisos():
+    conn = db.conectar()
+    try:
+        enviados = avisos.enviar(conn, "Mail CRM", "Aviso de prueba: los avisos funcionan en este dispositivo.")
+    finally:
+        conn.close()
+    if not enviados:
+        raise HTTPException(409, "No hay ningún dispositivo con los avisos activados.")
+    return {"enviados": enviados}
 
 
 @app.get("/api/contactos")
@@ -278,7 +454,13 @@ _actualizando = threading.Lock()
 
 
 def _actualizar() -> dict:
-    """Trae mails nuevos de Gmail y los clasifica. No aplica nada en Gmail."""
+    """Trae mails nuevos de Gmail, los clasifica y despues:
+      - aplica en Gmail lo que dicen TUS reglas (si las reglas automaticas estan activadas);
+        lo que decide la IA sigue esperando que lo confirmes;
+      - borra de la base los mails viejos;
+      - avisa al celular si hay mails para responder o que tenes que ver.
+    Si alguno de esos pasos falla, la actualizacion igual termina.
+    """
     if not _actualizando.acquire(blocking=False):
         raise HTTPException(409, "Ya hay una actualización en curso. Probá en un minuto.")
     try:
@@ -287,7 +469,31 @@ def _actualizar() -> dict:
         except gmail_client.FaltaAutorizacion as e:
             raise HTTPException(409, f"No se pudo entrar a Gmail. {e}")
         resultado = clasificar.clasificar_pendientes()
-        return {"nuevos": traidos["nuevos"], **resultado}
+        por_categoria = resultado.pop("por_categoria", {})
+        extra = {"aplicadas_por_reglas": 0, "borrados_viejos": 0, "avisos_enviados": 0}
+        conn = db.conectar()
+        try:
+            try:
+                if _reglas_automaticas(conn):
+                    hecho = acciones.aplicar_reglas(conn, gmail_client.obtener_servicio(interactivo=False))
+                    extra["aplicadas_por_reglas"] = hecho["aplicadas"]
+                    if hecho["aplicadas"] or hecho["errores"]:
+                        _registrar(f"reglas automaticas: {hecho['aplicadas']} aplicadas, {len(hecho['errores'])} con error")
+            except Exception as e:
+                _registrar(f"no se pudieron aplicar las reglas ({type(e).__name__})")
+            try:
+                extra["borrados_viejos"] = db.limpiar_viejos(conn, config.DIAS_DE_RETENCION, config.MAX_CUERPO)
+            except Exception as e:
+                _registrar(f"no se pudo limpiar la base ({type(e).__name__})")
+            texto = avisos.texto_de_aviso(por_categoria)
+            if texto:
+                try:
+                    extra["avisos_enviados"] = avisos.enviar(conn, "Mail CRM", texto)
+                except Exception as e:
+                    _registrar(f"no se pudieron mandar los avisos ({type(e).__name__})")
+        finally:
+            conn.close()
+        return {"nuevos": traidos["nuevos"], **resultado, **extra}
     finally:
         _actualizando.release()
 
@@ -324,17 +530,20 @@ class Deshacer(BaseModel):
 
 
 @app.post("/api/aplicar")
-def api_aplicar(pedido: Aplicar):
+def api_aplicar(pedido: Aplicar, request: Request):
     servicio = _gmail()
     conn = db.conectar()
     try:
-        return acciones.aplicar_decisiones(conn, servicio, pedido.decision_ids)
+        resultado = acciones.aplicar_decisiones(conn, servicio, pedido.decision_ids)
     finally:
         conn.close()
+    _registrar(f"acciones aplicadas en Gmail: {resultado['aplicadas']}, con error: {len(resultado['errores'])}", request)
+    return resultado
 
 
 @app.post("/api/deshacer")
-def api_deshacer(pedido: Deshacer):
+def api_deshacer(pedido: Deshacer, request: Request):
+    _registrar("accion deshecha en Gmail", request)
     servicio = _gmail()
     conn = db.conectar()
     try:
@@ -443,7 +652,7 @@ def api_borrar_borrador(pedido: BorrarBorrador):
 if __name__ == "__main__":
     import uvicorn
 
-    if config.PANEL_HOST != "127.0.0.1" and not login_activo():
+    if config.PANEL_HOST not in DIRECCIONES_LOCALES and not login_activo():
         raise SystemExit(
             "No arranco: el panel quedaria abierto a internet sin contraseña.\n"
             "Defini una con: python -m mail_crm.clave"

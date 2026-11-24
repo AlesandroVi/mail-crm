@@ -103,6 +103,20 @@
   #confirmar-detalle div { margin-top: 8px; }
   #btn-actualizar { margin-left: auto; }
   .nota-deshacer { margin-top: 10px; }
+  .enlace { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-align: left;
+            cursor: pointer; text-decoration: underline; text-decoration-color: var(--borde); text-underline-offset: 3px; }
+  .enlace:hover { text-decoration-color: var(--acento); }
+  .lista-papelera { margin: 6px 0 0 18px; padding: 0; font-size: 13px; color: var(--suave); }
+  .tarjeta { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; padding: 16px; margin-bottom: 12px; }
+  .tarjeta h3 { margin: 0 0 4px; font-size: 15px; }
+  .tarjeta .botones { margin-top: 12px; }
+  .interruptor { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+  .interruptor .chico { display: block; margin-top: 2px; }
+  .interruptor input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--acento); }
+  #contacto-notas { min-height: 90px; }
+  .historial { max-height: 260px; overflow-y: auto; margin-top: 8px; border-top: 1px solid var(--borde); }
+  .historial div { padding: 8px 0; border-bottom: 1px solid var(--borde); }
+  .subtitulo { margin: 16px 0 0; font-size: 13px; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -121,6 +135,7 @@
     <button role="tab" data-vista="mails" aria-selected="true">Mails</button>
     <button role="tab" data-vista="contactos" aria-selected="false">Contactos</button>
     <button role="tab" data-vista="reglas" aria-selected="false">Reglas</button>
+    <button role="tab" data-vista="ajustes" aria-selected="false">Ajustes</button>
   </nav>
 
   <section id="vista-mails">
@@ -151,7 +166,48 @@
       <tbody id="filas-reglas"></tbody>
     </table></div>
   </section>
+
+  <section id="vista-ajustes" hidden>
+    <div class="tarjeta">
+      <label class="interruptor">
+        <input type="checkbox" id="ajuste-reglas">
+        <span><b>Aplicar mis reglas solas</b>
+          <span class="chico">Al actualizar, lo que dicen tus reglas se hace en Gmail sin esperar el botón.
+          Lo que decide la IA siempre espera que lo confirmes. Si deshacés algo, no se vuelve a aplicar.</span></span>
+      </label>
+    </div>
+    <div class="tarjeta">
+      <h3>Avisos en este dispositivo</h3>
+      <div class="chico" id="avisos-estado">Revisando…</div>
+      <div class="chico nota-deshacer">El aviso dice cuántos mails tenés para responder o para ver, nunca quién te escribió ni el asunto.</div>
+      <div class="botones">
+        <button class="btn principal" id="avisos-activar" hidden>Activar avisos</button>
+        <button class="btn" id="avisos-probar" hidden>Mandar un aviso de prueba</button>
+        <button class="btn" id="avisos-desactivar" hidden>Desactivar</button>
+      </div>
+    </div>
+    <div class="tarjeta">
+      <h3>Datos guardados</h3>
+      <div class="chico" id="ajuste-retencion"></div>
+    </div>
+  </section>
 </main>
+
+<dialog id="contacto" class="ancho">
+  <h2 id="contacto-nombre"></h2>
+  <div class="chico" id="contacto-email"></div>
+  <div class="chico nota-deshacer" id="contacto-datos"></div>
+  <label>Notas tuyas sobre este contacto
+    <textarea id="contacto-notas" maxlength="2000" placeholder="Ej.: reclutador de la empresa X, espera respuesta el lunes"></textarea>
+  </label>
+  <div class="subtitulo" id="contacto-titulo-mails"></div>
+  <div class="historial" id="contacto-mails"></div>
+  <div class="pie">
+    <button class="btn" id="contacto-regla">Crear regla</button>
+    <button class="btn" id="contacto-cerrar">Cerrar</button>
+    <button class="btn principal" id="contacto-guardar">Guardar notas</button>
+  </div>
+</dialog>
 
 <dialog id="dialogo">
   <form method="dialog" id="form-dialogo">
@@ -243,7 +299,8 @@ $("btn-actualizar").addEventListener("click", async () => {
   try {
     const r = await api("/api/actualizar", { method: "POST" });
     await cargar();
-    avisar(r.aviso || (r.nuevos ? `${r.nuevos} mails nuevos, ${r.clasificados} clasificados.` : "No hay mails nuevos."));
+    const porReglas = r.aplicadas_por_reglas ? ` ${r.aplicadas_por_reglas} aplicados por tus reglas.` : "";
+    avisar(r.aviso || (r.nuevos ? `${r.nuevos} mails nuevos, ${r.clasificados} clasificados.${porReglas}` : `No hay mails nuevos.${porReglas}`));
   } catch (e) { avisar(e.message); }
   b.disabled = false; b.textContent = "Actualizar";
 });
@@ -267,6 +324,14 @@ $("btn-aplicar").addEventListener("click", () => {
   const textos = { papelera: "van a la papelera", archivar: "se archivan (salen de la bandeja)", destacar: "se marcan con estrella" };
   $("confirmar-detalle").replaceChildren(...Object.entries(cuenta).map(([a, n]) =>
     el("div", {}, el("b", { style: `color: var(--${a})` }, String(n)), ` ${n === 1 ? "mail" : "mails"}: ${textos[a]}`)));
+  // Lo que va a la papelera se muestra uno por uno: es lo unico que conviene mirar antes de confirmar.
+  const aPapelera = porAplicar().filter((m) => m.action === "papelera");
+  if (aPapelera.length) {
+    const lista = el("ul", { class: "lista-papelera" }, ...aPapelera.slice(0, 15).map((m) =>
+      el("li", {}, `${m.from_name || m.from_email}: ${m.subject || "(sin asunto)"}`)));
+    if (aPapelera.length > 15) lista.append(el("li", {}, `y ${aPapelera.length - 15} más`));
+    $("confirmar-detalle").append(lista);
+  }
   $("confirmar").showModal();
 });
 $("confirmar").addEventListener("close", async () => {
@@ -394,13 +459,113 @@ function pintarContactos() {
   if (!filas.length) { tbody.append(el("tr", {}, el("td", { colspan: "5", class: "vacio" }, "No hay contactos."))); return; }
   for (const c of filas) {
     tbody.append(el("tr", {},
-      el("td", {}, el("div", { class: "remitente" }, c.name || c.email), el("div", { class: "chico" }, c.email)),
+      el("td", {}, el("button", { class: "enlace remitente", onclick: () => abrirContacto(c.id) }, c.name || c.email),
+                   el("div", { class: "chico" }, c.email + (c.tiene_notas ? " · con notas" : ""))),
       el("td", { class: "num" }, String(c.email_count)),
       el("td", { class: "num chico" }, fecha(c.last_seen)),
       el("td", {}, c.regla ? etiqueta(c.regla.action) : el("span", { class: "chico" }, "Decide la IA")),
       el("td", {}, el("button", { class: "btn", onclick: () => abrirDialogo(c.email) }, c.regla ? "Cambiar regla" : "Crear regla"))));
   }
 }
+
+// --- Ficha de contacto: historial y notas ---
+let enContacto = null;
+async function abrirContacto(id) {
+  let r;
+  try { r = await api("/api/contactos/" + id); } catch (e) { avisar(e.message); return; }
+  const c = r.contacto; enContacto = c;
+  $("contacto-nombre").textContent = c.name || c.email;
+  $("contacto-email").textContent = c.email;
+  $("contacto-datos").textContent = `${c.email_count} ${c.email_count === 1 ? "mail" : "mails"} desde el ${fecha(c.first_seen)} · ` +
+    `último el ${fecha(c.last_seen)} · ${r.regla ? "Regla: " + NOMBRES[r.regla.action] + " (" + r.regla.pattern + ")" : "Sin regla: decide la IA"}`;
+  $("contacto-notas").value = c.notes || "";
+  $("contacto-regla").textContent = r.regla ? "Cambiar regla" : "Crear regla";
+  $("contacto-titulo-mails").textContent = `Mails de los últimos ${r.dias_de_retencion} días`;
+  $("contacto-mails").replaceChildren(...(r.mails.length ? r.mails.map((m) => el("div", {},
+      el("span", { class: "num chico" }, fecha(m.received_at) + "  "), m.subject || "(sin asunto)", " ",
+      etiqueta(m.action), m.applied ? el("span", { class: "chico" }, " · aplicada") : "",
+      m.gmail_draft_id ? el("span", { class: "chico" }, " · borrador en Gmail") : ""))
+    : [el("div", { class: "chico" }, "No quedan mails guardados de este contacto.")]));
+  $("contacto").showModal();
+}
+$("contacto-guardar").addEventListener("click", async () => {
+  try {
+    await api(`/api/contactos/${enContacto.id}/notas`, { method: "POST", headers: { "Content-Type": "application/json" },
+                                                       body: JSON.stringify({ notas: $("contacto-notas").value }) });
+    $("contacto").close(); await cargar(); avisar("Notas guardadas.");
+  } catch (e) { avisar(e.message); }
+});
+$("contacto-cerrar").addEventListener("click", () => $("contacto").close());
+$("contacto-regla").addEventListener("click", () => { const email = enContacto.email; $("contacto").close(); abrirDialogo(email); });
+
+// --- Ajustes ---
+async function cargarAjustes() {
+  try {
+    const a = await api("/api/ajustes");
+    $("ajuste-reglas").checked = a.reglas_automaticas;
+    $("ajuste-retencion").textContent = `Los mails se borran de la base del panel a los ${a.dias_de_retencion} días ` +
+      "(en Gmail no se borra nada). Los contactos, tus notas y tus reglas se conservan siempre.";
+  } catch (e) { avisar(e.message); }
+  estadoAvisos();
+}
+$("ajuste-reglas").addEventListener("change", async (ev) => {
+  try {
+    await api("/api/ajustes", { method: "POST", headers: { "Content-Type": "application/json" },
+                                body: JSON.stringify({ reglas_automaticas: ev.target.checked }) });
+    avisar(ev.target.checked ? "Tus reglas se van a aplicar solas en cada actualización." : "Tus reglas vuelven a esperar el botón.");
+  } catch (e) { ev.target.checked = !ev.target.checked; avisar(e.message); }
+});
+
+// --- Avisos al celular (Web Push) ---
+const soportaAvisos = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+const registroSW = () => navigator.serviceWorker.register("/sw.js");
+function bytesDeClave(b64) {
+  const s = atob(b64.replace(/-/g, "+").replace(/_/g, "/") + "=".repeat((4 - (b64.length % 4)) % 4));
+  return Uint8Array.from(s, (ch) => ch.charCodeAt(0));
+}
+async function estadoAvisos() {
+  const est = $("avisos-estado"), ids = ["avisos-activar", "avisos-probar", "avisos-desactivar"];
+  for (const id of ids) $(id).hidden = true;
+  if (!soportaAvisos) {
+    est.textContent = "Este navegador no permite avisos. En iPhone, primero agregá el panel a la pantalla de inicio y abrilo desde ahí.";
+    return;
+  }
+  try {
+    const sub = await (await registroSW()).pushManager.getSubscription();
+    $("avisos-activar").hidden = Boolean(sub) || Notification.permission === "denied";
+    $("avisos-probar").hidden = $("avisos-desactivar").hidden = !sub;
+    est.textContent = sub ? "Activados: te llega un aviso cuando hay mails para responder o que tenés que ver."
+      : Notification.permission === "denied" ? "Bloqueaste los avisos para este sitio. Habilitalos en la configuración del navegador y volvé a esta pantalla."
+      : "Desactivados en este dispositivo.";
+  } catch (e) { est.textContent = "No se pudo revisar el estado de los avisos."; }
+}
+$("avisos-activar").addEventListener("click", async () => {
+  try {
+    if (await Notification.requestPermission() !== "granted") { avisar("Sin tu permiso, el navegador no deja mostrar avisos."); return; }
+    const { clave } = await api("/api/avisos/clave");
+    const sub = await (await registroSW()).pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: bytesDeClave(clave) });
+    await api("/api/avisos/suscribir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(sub.toJSON()) });
+    avisar("Avisos activados en este dispositivo.");
+  } catch (e) { avisar(e.message || "No se pudieron activar los avisos."); }
+  estadoAvisos();
+});
+$("avisos-desactivar").addEventListener("click", async () => {
+  try {
+    const sub = await (await registroSW()).pushManager.getSubscription();
+    if (sub) {
+      await api("/api/avisos/desuscribir", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ endpoint: sub.endpoint }) });
+      await sub.unsubscribe();
+    }
+    avisar("Avisos desactivados en este dispositivo.");
+  } catch (e) { avisar(e.message); }
+  estadoAvisos();
+});
+$("avisos-probar").addEventListener("click", async () => {
+  try {
+    const r = await api("/api/avisos/probar", { method: "POST" });
+    avisar(`Aviso de prueba enviado a ${r.enviados} ${r.enviados === 1 ? "dispositivo" : "dispositivos"}.`);
+  } catch (e) { avisar(e.message); }
+});
 
 function pintarReglas() {
   const sel = document.querySelector("#form-regla select");
@@ -454,6 +619,7 @@ for (const b of document.querySelectorAll("nav button")) {
       o.setAttribute("aria-selected", String(o === b));
       $("vista-" + o.dataset.vista).hidden = o !== b;
     }
+    if (b.dataset.vista === "ajustes") cargarAjustes();
   });
 }
 cargar().catch((e) => avisar(e.message));

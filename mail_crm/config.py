@@ -27,9 +27,6 @@ GMAIL_SCOPES = ["https://www.googleapis.com/auth/gmail.modify"]
 GMAIL_QUERY = "in:inbox newer_than:14d"
 MAX_MAILS_POR_SYNC = 50
 
-# Recorte del cuerpo del mail que guardamos (caracteres)
-MAX_CUERPO = 20_000
-
 
 def _cargar_env() -> None:
     """Lee el archivo .env (lineas CLAVE=valor) y lo pasa a variables de entorno."""
@@ -107,3 +104,21 @@ FIRMA_BORRADOR = os.environ.get("FIRMA_BORRADOR", "Alesandro")
 
 # Si la IA no esta bastante segura, no se hace nada con ese mail.
 CONFIANZA_MINIMA = 0.8
+
+# --- Datos guardados ---
+# Del cuerpo de cada mail se guarda solo lo que la IA llega a leer: guardar mas
+# solo agrandaria lo que se expone si alguien entrara a la base.
+MAX_CUERPO = max(CUERPO_PARA_IA, CUERPO_PARA_BORRADOR)
+# Los mails (y sus decisiones y borradores) se borran de la base pasados estos dias.
+# Los contactos, sus notas y tus reglas se conservan siempre.
+DIAS_DE_RETENCION = int(os.environ.get("DIAS_DE_RETENCION", "60"))
+
+# En tu PC la consola muestra remitente y asunto de cada mail. En el servidor no:
+# sus registros los guarda el hosting y no hace falta que tengan datos personales.
+DETALLE_EN_CONSOLA = PANEL_HOST == "127.0.0.1"
+
+# --- Avisos al celular ---
+# Despues de cada actualizacion llega un aviso si aparecieron mails de estas categorias.
+CATEGORIAS_CON_AVISO = {"requiere_respuesta": "para responder", "atencion": "que tenés que ver"}
+# Identifica al que manda los avisos ante Google, Apple y Mozilla (Render la define sola).
+URL_PANEL = os.environ.get("RENDER_EXTERNAL_URL", "https://mail-crm.onrender.com")

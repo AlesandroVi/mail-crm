@@ -10,6 +10,9 @@ on:
     - cron: "0 */3 * * *"
   workflow_dispatch: {}
 
+# La tarea solo llama al panel con curl: no necesita ningun permiso sobre el repositorio.
+permissions: {}
+
 jobs:
   revisar:
     runs-on: ubuntu-latest

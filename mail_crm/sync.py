@@ -21,7 +21,8 @@ def sincronizar(interactivo: bool = True) -> dict:
             mail = gmail_client.traer_mail(servicio, gmail_id)
             if db.guardar_mail(conn, mail):
                 nuevos += 1
-                print(f"  + {mail['from_email']:<40} {mail['subject'][:60]}")
+                if config.DETALLE_EN_CONSOLA:
+                    print(f"  + {mail['from_email']:<40} {mail['subject'][:60]}")
 
         print(f"\n{len(ids)} mails revisados, {nuevos} nuevos guardados.")
         if interactivo:

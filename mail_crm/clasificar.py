@@ -24,12 +24,18 @@ def decidir_accion(categoria: str, confianza: float) -> str:
 
 
 def _mostrar(categoria: str, accion: str, mail: dict, motivo: str) -> None:
+    if not config.DETALLE_EN_CONSOLA:  # en el servidor no se registran remitentes ni asuntos
+        return
     print(f"  {categoria:<19} -> {accion:<9} {mail['from_email'][:30]:<30} {(mail['subject'] or '')[:40]}")
     print(f"  {'':<19}    {motivo}")
 
 
 def clasificar_pendientes(rehacer: bool = False) -> dict:
-    """Clasifica lo pendiente. Devuelve {"clasificados", "pendientes", "aviso"}."""
+    """Clasifica lo pendiente.
+
+    Devuelve {"clasificados", "pendientes", "aviso", "por_categoria"}; este ultimo
+    cuenta las categorias de lo clasificado ahora (se usa para los avisos al celular).
+    """
     conn = db.conectar()
     try:
         return _clasificar(conn, rehacer)
@@ -44,8 +50,9 @@ def _clasificar(conn, rehacer: bool) -> dict:
     pendientes = [dict(f) for f in db.mails_sin_decision(conn, config.MAX_MAILS_POR_CLASIFICACION)]
     if not pendientes:
         print("No hay mails pendientes de clasificar. Corre primero: python -m mail_crm.sync")
-        return {"clasificados": 0, "pendientes": 0, "aviso": None}
+        return {"clasificados": 0, "pendientes": 0, "aviso": None, "por_categoria": {}}
     aviso = None
+    por_categoria: dict[str, int] = {}
 
     # 1) Reglas del usuario: no gastan cuota de IA y siempre dan el mismo resultado.
     reglas = db.listar_reglas(conn)
@@ -86,13 +93,16 @@ def _clasificar(conn, rehacer: bool) -> dict:
             db.guardar_decision(conn, mail["id"], r["categoria"], accion, motivo, clasificador.modelo_usado)
             _mostrar(r["categoria"], accion, mail, motivo)
             por_ia += 1
+            if accion != "ninguna":  # solo lo que la IA decidio con confianza
+                por_categoria[r["categoria"]] = por_categoria.get(r["categoria"], 0) + 1
 
     print(
         f"\n{por_regla + por_ia} de {len(pendientes)} mails clasificados "
         f"({por_regla} por reglas tuyas, {por_ia} por la IA). No se toco Gmail."
     )
     hechos = por_regla + por_ia
-    return {"clasificados": hechos, "pendientes": len(pendientes) - hechos, "aviso": aviso}
+    return {"clasificados": hechos, "pendientes": len(pendientes) - hechos, "aviso": aviso,
+            "por_categoria": por_categoria}
 
 
 if __name__ == "__main__":

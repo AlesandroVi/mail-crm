@@ -51,6 +51,18 @@ def aplicar_decisiones(conn, servicio, ids: list[int] | None = None) -> dict:
     return {"aplicadas": aplicadas, "errores": errores}
 
 
+def aplicar_reglas(conn, servicio) -> dict:
+    """Aplica solas las decisiones que vienen de TUS reglas (nunca las de la IA).
+
+    Saltea las que deshiciste a mano, para no volver a hacer algo que revertiste.
+    """
+    ids = [d["id"] for d in db.decisiones_aplicables(conn, ACCIONES_CON_EFECTO)
+           if d["model"] == "regla" and not d["undone"]]
+    if not ids:
+        return {"aplicadas": 0, "errores": []}
+    return aplicar_decisiones(conn, servicio, ids)
+
+
 def deshacer_decision(conn, servicio, decision_id: int) -> None:
     """Revierte en Gmail una decision ya aplicada."""
     d = db.decision_por_id(conn, decision_id)

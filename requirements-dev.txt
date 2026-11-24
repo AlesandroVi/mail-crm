@@ -1,0 +1,4 @@
+# Solo para tu PC: herramientas para correr los tests (Render no las instala).
+-r requirements.txt
+pytest==9.2.0
+httpx==0.28.1
