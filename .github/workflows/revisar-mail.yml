@@ -1,8 +1,8 @@
 # Cada 3 horas le pide al servidor que traiga los mails nuevos y los clasifique.
-# (Solo clasifica: aplicar en Gmail sigue siendo un boton que apretas vos.)
+# (Tus reglas se aplican solas si lo activaste en Ajustes; lo que decide la IA sigue esperando tu confirmacion.)
 # Necesita dos secretos en GitHub (Settings -> Secrets and variables -> Actions):
-#   PANEL_URL    la direccion del panel, por ejemplo https://mail-crm.onrender.com
-#   TAREA_TOKEN  el mismo valor que esta en nube.env
+#   PANEL_URL    la direccion del panel, por ejemplo https://tu-app.onrender.com
+#   TAREA_TOKEN  el mismo valor que esta en nube.env (no se sube a GitHub)
 name: Revisar mail
 
 on:

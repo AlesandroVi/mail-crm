@@ -120,7 +120,7 @@
   nav { overflow-x: auto; scrollbar-width: none; }
   nav button { white-space: nowrap; }
   #resumen-texto { white-space: pre-line; }
-  .tablero { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(220px, 1fr); gap: 10px; overflow-x: auto; padding-bottom: 8px; }
+  .tablero { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); gap: 10px; overflow-x: auto; padding-bottom: 8px; }
   .columna { background: var(--panel); border: 1px solid var(--borde); border-radius: 10px; padding: 10px; min-height: 120px; }
   .columna h3 { margin: 0 0 8px; font-size: 13px; color: var(--suave); text-transform: uppercase; letter-spacing: 0.04em; }
   .postulacion { border: 1px solid var(--borde); border-radius: 8px; padding: 8px 10px; margin-bottom: 8px; background: var(--fondo); }
@@ -891,17 +891,20 @@ $("form-regla").addEventListener("submit", async (ev) => {
 });
 $("buscar-mails").addEventListener("input", pintarMails);
 $("buscar-contactos").addEventListener("input", pintarContactos);
-for (const b of document.querySelectorAll("nav button")) {
-  b.addEventListener("click", () => {
-    for (const o of document.querySelectorAll("nav button")) {
-      o.setAttribute("aria-selected", String(o === b));
-      $("vista-" + o.dataset.vista).hidden = o !== b;
-    }
-    if (b.dataset.vista === "ajustes") cargarAjustes();
-    if (b.dataset.vista === "estadisticas") cargarEstadisticas();
-  });
+function mostrarVista(b) {
+  for (const o of document.querySelectorAll("nav button")) {
+    o.setAttribute("aria-selected", String(o === b));
+    $("vista-" + o.dataset.vista).hidden = o !== b;
+  }
+  history.replaceState(null, "", "#" + b.dataset.vista);  // cada pestaña tiene su direccion (ej. #postulaciones)
+  if (b.dataset.vista === "ajustes") cargarAjustes();
+  if (b.dataset.vista === "estadisticas") cargarEstadisticas();
 }
-cargar().catch((e) => avisar(e.message));
+for (const b of document.querySelectorAll("nav button")) b.addEventListener("click", () => mostrarVista(b));
+cargar().then(() => {
+  const b = document.querySelector(`nav button[data-vista="${CSS.escape(location.hash.slice(1))}"]`);
+  if (b) mostrarVista(b);
+}).catch((e) => avisar(e.message));
 </script>
 </body>
 </html>

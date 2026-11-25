@@ -19,3 +19,12 @@ client_secret*.json
 __pycache__/
 *.pyc
 !requirements-dev.txt
+
+# Informe de la auditoria de seguridad: es un mapa de los puntos debiles de la app
+# en linea, asi que queda solo en tu PC (este repositorio es publico).
+.security-audit/
+
+# Herramientas de trabajo locales
+.claude/
+.playwright-mcp/
+.pytest_cache/

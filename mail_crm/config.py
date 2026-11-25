@@ -153,4 +153,4 @@ ETIQUETA_POR_CATEGORIA = {
 # Despues de cada actualizacion llega un aviso si aparecieron mails de estas categorias.
 CATEGORIAS_CON_AVISO = {"requiere_respuesta": "para responder", "atencion": "que tenés que ver"}
 # Identifica al que manda los avisos ante Google, Apple y Mozilla (Render la define sola).
-URL_PANEL = os.environ.get("RENDER_EXTERNAL_URL", "https://mail-crm.onrender.com")
+URL_PANEL = os.environ.get("RENDER_EXTERNAL_URL", "https://localhost")

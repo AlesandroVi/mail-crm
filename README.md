@@ -1,187 +1,124 @@
 # Mail CRM
 
-App local que lee tu Gmail, arma un CRM de contactos en SQLite y (más adelante)
-usa una IA para decidir qué hacer con cada mail.
+Un CRM personal que lee mi Gmail, ordena el correo con reglas e inteligencia artificial y me ayuda con la búsqueda laboral: detecta ofertas, lleva un tablero de postulaciones, avisa qué mails quedaron sin respuesta y arma un resumen cada mañana. Funciona como app instalable (PWA) en la PC y en el celular.
 
-## Estado
+La regla de diseño principal es que **la IA propone y yo decido**: nada cambia en Gmail sin mi confirmación (salvo mis propias reglas, si las activo), todo se puede deshacer y la app no tiene forma de enviar un mail.
 
-- [x] Paso 1: conectar Gmail y leer mails
-- [x] Paso 2: guardar mails y contactos en SQLite
-- [x] Paso 3: clasificar con IA (Gemini) en modo simulación
-- [x] Paso 4: panel web (mails, contactos y reglas)
-- [x] Paso 5: acciones reales desde el panel (papelera, archivar, destacar) con deshacer
-- [x] Paso 6: borradores de respuesta (la IA redacta, vos corregís y se guardan en Gmail sin enviarse)
-- [ ] Paso 7: aplicación automática
+![Panel principal con el resumen del día y los mails clasificados](docs/img/mails.png)
+
+> Las capturas usan datos inventados.
+
+## Qué hace
+
+- **Clasifica el correo con IA (Gemini):** spam, promoción, notificación, atención, personal, importante o "para responder". La IA solo elige la categoría; qué se hace con cada una lo decide una tabla del código.
+- **Aplica acciones en Gmail** (papelera, archivar, destacar) después de confirmarlas, con botón de **deshacer** en cada una.
+- **Reglas por remitente o dominio** que mandan sobre la IA, y que se pueden aplicar solas.
+- **Sugiere reglas** a partir de lo que hago: si corrijo dos veces a la IA con el mismo remitente, propone la regla.
+- **Borradores de respuesta:** la IA redacta, yo corrijo y se guardan como borrador en Gmail. Nunca se envían solos.
+- **Tablero de postulaciones** (Me interesa → Me postulé → Entrevista → Oferta). La IA detecta los mails de búsquedas laborales concretas y los sugiere.
+- **Seguimientos:** muestra los mails que mandé hace más de 3 días y nadie contestó.
+- **Resumen diario** escrito por la IA y **avisos al celular** (Web Push). El aviso solo dice cuántos mails hay, sin remitentes ni asuntos.
+- **Ficha de cada contacto** con su historial y notas, **estadísticas** y **etiquetas** opcionales en Gmail.
+- **Revisión automática cada 3 horas** con GitHub Actions.
+
+| Postulaciones | Seguimientos |
+|---|---|
+| ![Tablero de postulaciones](docs/img/postulaciones.png) | ![Mails enviados sin respuesta](docs/img/seguimientos.png) |
+| **Estadísticas** | **Sugerencias de reglas** |
+| ![Gráficos de mails por semana y por remitente](docs/img/estadisticas.png) | ![Reglas y sugerencias](docs/img/reglas.png) |
+
+<p align="center"><img src="docs/img/celular-mails.png" alt="El panel instalado en el celular, en modo oscuro" width="300"></p>
+
+## Cómo está hecho
+
+```mermaid
+flowchart LR
+    G[Gmail API] -->|mails nuevos y enviados| S[Sincronización]
+    S --> DB[(SQLite en la PC<br/>Postgres en Supabase)]
+    DB --> R{¿Hay regla<br/>del usuario?}
+    R -->|sí| D[Decisión]
+    R -->|no| IA[Gemini: elige<br/>la categoría] --> T[Tabla del código:<br/>categoría → acción] --> D
+    D --> P[Panel web / PWA<br/>FastAPI]
+    P -->|el usuario confirma| G
+    GA[GitHub Actions<br/>cada 3 horas] -->|token| P
+    P -->|Web Push| C[Celular]
+```
+
+- **Backend:** Python, FastAPI y uvicorn. Funciona con SQLite en la PC y con Postgres (Supabase) en la nube, usando el mismo código.
+- **Frontend:** HTML, CSS y JavaScript sin frameworks, instalable como PWA, con service worker para los avisos.
+- **IA:** API de Gemini con salida JSON validada contra un esquema, reintentos y modelos de respaldo si uno está saturado.
+- **Infraestructura:** Render (servidor), Supabase (base de datos) y GitHub Actions (tarea programada).
+
+## Seguridad
+
+Le hice una auditoría de seguridad con Gitleaks, Semgrep, Bandit, pip-audit y zizmor, más una revisión manual. Corregí y verifiqué todo lo que encontró. Lo principal:
+
+- **La IA no puede hacer daño por sí sola:** solo devuelve una categoría de una lista cerrada, sus respuestas se validan campo por campo, el contenido de los mails se trata siempre como datos y no como instrucciones, y las acciones necesitan confirmación y son reversibles.
+- **Inicio de sesión:** contraseña guardada con scrypt, cookie de sesión firmada (HttpOnly, SameSite, Secure) que se puede revocar, y límite de intentos por dispositivo que no se puede esquivar cambiando la IP.
+- **Navegador:** Content-Security-Policy con huellas SHA-256 (sin `unsafe-inline`), HSTS, X-Frame-Options y protección contra pedidos de otros sitios.
+- **Datos:** Row Level Security en todas las tablas de Supabase, conexión a la base con cifrado obligatorio, mails que se borran solos a los 60 días y avisos que solo se envían a servicios de push conocidos.
+- **Sin contraseña**, el panel solo responde a la propia PC y no arranca si quedaría expuesto a internet.
+- **Dependencias** con versiones fijas y workflow de GitHub sin permisos.
+
+## Tests
+
+51 pruebas automáticas con pytest. Usan una base temporal y un Gmail simulado, así que nunca tocan datos reales. Cubren el login y las sesiones, las cabeceras de seguridad, las reglas, aplicar y deshacer, los borradores, los avisos, el tablero, los seguimientos, el resumen, las sugerencias, las etiquetas y la limpieza de datos.
+
+```bash
+.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+.venv\Scripts\python.exe -m pytest
+```
+
+En Windows también se puede hacer doble clic en `Correr tests.bat`.
 
 ## Estructura
 
 | Archivo | Qué hace |
 |---|---|
-| `mail_crm/config.py` | Rutas, permisos de Gmail y qué mails traer |
-| `mail_crm/db.py` | Tablas `contacts`, `emails`, `decisions` y cómo se guardan |
-| `mail_crm/gmail_client.py` | Inicio de sesión con Google y lectura de mails |
-| `mail_crm/sync.py` | Trae los mails nuevos y los guarda |
+| `mail_crm/panel.py` | Servidor web: rutas, inicio de sesión, cabeceras de seguridad y la actualización completa |
+| `mail_crm/web/` | Panel (HTML, CSS y JS), manifiesto de la PWA y service worker |
+| `mail_crm/gmail_client.py` | Conexión con Gmail (OAuth), lectura de mails y borradores |
+| `mail_crm/sync.py` · `seguimientos.py` | Traen los mails nuevos y los enviados |
+| `mail_crm/clasificador.py` · `clasificar.py` | Llamadas a Gemini y decisión por mail (reglas primero, IA después) |
+| `mail_crm/acciones.py` | Aplicar y deshacer en Gmail |
+| `mail_crm/redactor.py` · `resumen.py` | Borradores de respuesta y resumen diario |
+| `mail_crm/aprendizaje.py` | Sugerencias de reglas |
+| `mail_crm/avisos.py` · `etiquetas.py` · `estadisticas.py` | Web Push, etiquetas de Gmail y números del panel |
+| `mail_crm/db.py` | Base de datos (SQLite o Postgres con el mismo código) |
+| `mail_crm/auth.py` | Contraseñas, sesiones y límite de intentos |
+| `tests/` | Pruebas automáticas |
 
-## Conseguir `credentials.json` (una sola vez)
+## Instalación
 
-1. Entrá a <https://console.cloud.google.com> y creá un proyecto nuevo (por ejemplo "mail-crm").
-2. Menú **APIs y servicios → Biblioteca**, buscá **Gmail API** y tocá **Habilitar**.
-3. Menú **APIs y servicios → Pantalla de consentimiento de OAuth**:
-   - Tipo de usuario: **Externo**.
-   - Nombre de la app y tu mail donde lo pida.
-   - En **Usuarios de prueba**, agregá tu propio Gmail.
-4. Menú **APIs y servicios → Credenciales → Crear credenciales → ID de cliente de OAuth**:
-   - Tipo de aplicación: **App de escritorio**.
-   - Descargá el JSON, renombralo a `credentials.json` y ponelo en esta carpeta
-     (al lado de este README).
-
-`credentials.json` y `token.json` son secretos: no los compartas ni los subas a GitHub
-(ya están en `.gitignore`).
-
-## Correr la sincronización
+Requiere Python 3.13 o más nuevo.
 
 ```bash
-.venv\Scripts\python.exe -m mail_crm.sync
+python -m venv .venv
+.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-La primera vez se abre el navegador para que autorices la app. Va a aparecer
-"Google no verificó esta app": es normal porque la app es tuya; tocá
-**Configuración avanzada → Ir a (nombre de la app)**.
+1. **Gmail:** en [Google Cloud](https://console.cloud.google.com) creá un proyecto, habilitá la **Gmail API** y creá un **ID de cliente de OAuth** de tipo "App de escritorio". Descargá el JSON como `credentials.json` en esta carpeta. Si la app queda en modo prueba, agregá tu Gmail como usuario de prueba.
+2. **IA:** sacá una clave gratis en [Google AI Studio](https://aistudio.google.com/apikey), copiá `.env.example` como `.env` y pegala en `GEMINI_API_KEY`.
+3. **Primera sincronización:** `.venv\Scripts\python.exe -m mail_crm.sync`. Se abre el navegador para autorizar la app con el permiso "modificar", que permite leer, archivar, destacar y mover a la papelera, pero no borrar definitivamente.
+4. **Contraseña del panel** (opcional en la PC, obligatoria en la nube): `.venv\Scripts\python.exe -m mail_crm.clave`
+5. **Panel:** doble clic en `Abrir panel.bat`, o `.venv\Scripts\python.exe -m mail_crm.panel`, y abrí <http://127.0.0.1:8000>.
 
-La app pide el permiso **modificar**: puede leer, mover a la papelera, archivar y
-destacar mails. No puede borrarlos de forma definitiva. Si la app cambia de
-permisos, te pide iniciar sesión de nuevo la próxima vez que corras este comando.
+`credentials.json`, `token.json` y `.env` son secretos y están en `.gitignore`.
 
-## Clasificar con IA (modo simulación)
+### En la nube (para usarlo desde el celular)
 
-1. Sacá una clave gratis en <https://aistudio.google.com/apikey> (no pide tarjeta).
-2. Copiá `.env.example` como `.env` y pegá la clave después de `GEMINI_API_KEY=`.
-3. Corré:
+1. Creá un proyecto en Supabase y poné la cadena de conexión **Session pooler** en `.env` como `DATABASE_URL`. Para copiar tus datos locales: `python -m mail_crm.migrar`.
+2. Ejecutá `python -m mail_crm.nube`: genera `nube.env` con las variables del servidor.
+3. En Render: **New → Blueprint** con este repositorio (usa `render.yaml`), y cargá las variables de `nube.env` en Environment. Después borrá `nube.env`.
+4. En GitHub (**Settings → Secrets and variables → Actions**) creá `PANEL_URL` y `TAREA_TOKEN` para la revisión automática.
+5. En el celular abrí la dirección de Render, iniciá sesión e instalá la app.
 
-```bash
-.venv\Scripts\python.exe -m mail_crm.clasificar
-```
+Para que la sesión de Gmail no venza cada 7 días, publicá la app de Google Cloud (Google Auth Platform → Público → Publicar app).
 
-La IA elige una categoría para cada mail y la app anota en la tabla `decisions`
-qué acción tomaría. **No toca nada en Gmail.**
+## Qué aprendí
 
-| Categoría | Acción que tomaría |
-|---|---|
-| spam | papelera |
-| promocion, notificacion | archivar |
-| personal | dejar |
-| importante | destacar |
-| requiere_respuesta | borrador |
-
-Si la IA tiene menos de 80% de confianza, la acción es `ninguna`. Estas reglas
-están en `mail_crm/config.py`.
-
-### Reglas por remitente
-
-Una regla dice "con los mails de este remitente, hacé siempre esto" y manda
-sobre la IA. El patrón puede ser un mail exacto o un dominio.
-
-```bash
-.venv\Scripts\python.exe -m mail_crm.reglas
-.venv\Scripts\python.exe -m mail_crm.reglas agregar tienda.com papelera
-.venv\Scripts\python.exe -m mail_crm.reglas borrar tienda.com
-```
-
-Acciones posibles: `papelera`, `archivar`, `dejar`, `destacar`.
-
-Para volver a clasificar todo después de cambiar reglas:
-
-```bash
-.venv\Scripts\python.exe -m mail_crm.clasificar --rehacer
-```
-
-Lo que la IA sabe de vos (por ejemplo, que te interesan las ofertas de empleo)
-está en `PERFIL_USUARIO`, dentro de `mail_crm/config.py`.
-
-Si el modelo configurado no existe o no tiene cuota gratuita, mirá cuáles podés usar:
-
-```bash
-.venv\Scripts\python.exe -m mail_crm.clasificador
-```
-
-y poné el que elijas en `.env` como `GEMINI_MODEL=nombre-del-modelo`.
-
-## Panel web
-
-La forma fácil: doble clic en **`Abrir panel.bat`**. Arranca el servidor en una
-ventana minimizada y abre el panel en el navegador. Para apagarlo, cerrá esa ventana.
-
-Para instalarlo como app en la PC: con el panel abierto en Chrome o Edge, tocá el
-ícono de instalar en la barra de direcciones (o menú ⋮ → "Instalar Mail CRM").
-La app instalada necesita que el servidor esté corriendo, así que abrila después
-de `Abrir panel.bat`.
-
-### Contraseña del panel
-
-```bash
-.venv\Scripts\python.exe -m mail_crm.clave
-```
-
-Te pide una contraseña (mínimo 10 caracteres) y guarda en `.env` solo su hash.
-Desde ese momento el panel pide iniciar sesión. Tras 5 intentos fallidos se
-bloquea 15 minutos. En tu PC es opcional; en un servidor de internet es
-obligatoria (el panel se niega a arrancar sin ella). Para quitarla, borrá las
-líneas `PANEL_CLAVE_HASH` y `PANEL_SECRETO` de `.env`.
-
-También se puede arrancar a mano:
-
-```bash
-.venv\Scripts\python.exe -m mail_crm.panel
-```
-
-Abrí <http://127.0.0.1:8000>. Muestra qué haría la app con cada mail, la lista de
-contactos y las reglas, y permite crear o borrar reglas con un clic. El panel solo
-es accesible desde tu propia PC. Para cerrarlo, Ctrl+C en la terminal.
-
-El botón **Aplicar en Gmail** ejecuta las decisiones pendientes después de que las
-confirmes. Nada se aplica solo. Cada mail aplicado tiene un botón **Deshacer**:
-
-| Acción | Qué hace en Gmail | Deshacer |
-|---|---|---|
-| Papelera | Mueve a la papelera (se guarda 30 días) | Lo saca de la papelera |
-| Archivar | Lo quita de la bandeja de entrada | Lo devuelve a la bandeja |
-| Destacar | Le pone la estrella | Se la quita |
-
-## Subir a la nube (para usarlo desde el celular)
-
-Piezas: **Supabase** guarda los datos (Postgres), **Render** corre el panel con
-https, **GitHub** guarda el código y dispara la revisión automática cada 3 horas.
-
-1. **Contraseña del panel** (obligatoria en la nube): `python -m mail_crm.clave`
-2. **Google en producción:** en Google Cloud → Google Auth Platform → Público →
-   **Publicar app**. Después borrá `token.json` y corré `python -m mail_crm.sync`
-   para iniciar sesión de nuevo. Así la sesión de Gmail deja de vencer cada 7 días.
-3. **Base de datos:** creá un proyecto en Supabase, tocá **Connect** y copiá la
-   cadena de conexión **Session pooler**. Pegala en `.env` como `DATABASE_URL=...`
-   (con tu contraseña de la base en lugar de `[YOUR-PASSWORD]`).
-4. **Copiar tus datos:** `python -m mail_crm.migrar`
-5. **Variables del servidor:** `python -m mail_crm.nube` crea `nube.env`.
-6. **GitHub:** subí el proyecto a un repositorio **privado**.
-7. **Render:** New → Blueprint → elegí el repositorio (usa `render.yaml`). En
-   Environment pegá el contenido de `nube.env`. Después borrá `nube.env`.
-8. **Revisión automática:** en GitHub → Settings → Secrets and variables → Actions,
-   creá `PANEL_URL` (la dirección que te dio Render) y `TAREA_TOKEN` (el de `nube.env`).
-9. **Celular:** abrí la dirección de Render en Chrome, iniciá sesión y tocá
-   "Agregar a pantalla principal".
-
-Mientras `DATABASE_URL` esté en `.env`, la app de tu PC también usa la base de
-la nube (así PC y celular ven lo mismo). Si la quitás, vuelve a usar `crm.db`.
-
-Variables de entorno que entiende la app: `DATABASE_URL`, `GEMINI_API_KEY`,
-`GEMINI_MODEL`, `GMAIL_TOKEN_JSON`, `PANEL_HOST`, `PORT`, `PANEL_CLAVE_HASH`,
-`PANEL_SECRETO`, `TAREA_TOKEN`.
-
-## Problemas comunes
-
-- **"Se agotó la cuota gratuita de Gemini":** la capa gratuita permite pocos
-  pedidos por día. Esperá y volvé a correrlo; los mails que faltan quedan pendientes.
-
-- **Dejó de funcionar después de una semana:** mientras la app esté en modo
-  "prueba" en Google Cloud, el inicio de sesión vence a los 7 días. Borrá
-  `token.json` y volvé a correr la sincronización.
-- **"Access blocked" al iniciar sesión:** falta agregar tu Gmail en "Usuarios de prueba".
+- Conectar APIs reales: OAuth de Google, Gmail y Gemini.
+- Diseñar una app con IA en la que la IA no tenga la última palabra.
+- Desplegar con Render, Supabase y GitHub Actions.
+- Seguridad web aplicada: sesiones, CSP, RLS y auditoría con herramientas profesionales.
+- Escribir pruebas automáticas con servicios externos simulados.
